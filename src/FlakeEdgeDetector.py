@@ -19,18 +19,19 @@ contour_color = (0,0,0) # in BGR
 #----------------------------
 
 script_dir = os.path.dirname(__file__)
+project_dir = os.path.dirname(script_dir)
 image_subfolder1 = "Testing Images"
 image_subfolder2 = "Graphene"
 image_subfolder3 = "Unmeasured"
 image_file = "GR 100X 2"
 
-image_dir = os.path.join(script_dir, image_subfolder1, image_subfolder2, image_subfolder3)
+image_dir = os.path.join(project_dir, image_subfolder1, image_subfolder2, image_subfolder3)
 for entry in os.listdir(image_dir):
     if entry.startswith(image_file):
         image_file = entry
         break
 
-image_path = os.path.join(script_dir, image_subfolder1, image_subfolder2, image_subfolder3, image_file)
+image_path = os.path.join(project_dir, image_subfolder1, image_subfolder2, image_subfolder3, image_file)
 
 #----------------------------
 # Load Image
