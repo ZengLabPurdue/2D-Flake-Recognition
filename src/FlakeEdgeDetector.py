@@ -1,42 +1,23 @@
-import sys
-import os
 import math
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
+from tkinter import filedialog
 
 #---------------------------
 # Program Parameters
 #---------------------------
 
-num_contours = 1
+num_contours = 100
 contour_thickness = 10
 contour_color = (0,0,0) # in BGR
-
-#----------------------------
-# Find image
-#----------------------------
-
-script_dir = os.path.dirname(__file__)
-project_dir = os.path.dirname(script_dir)
-image_subfolder1 = "Testing Images"
-image_subfolder2 = "Graphene"
-image_subfolder3 = "Unmeasured"
-image_file = "GR 100X 2"
-
-image_dir = os.path.join(project_dir, image_subfolder1, image_subfolder2, image_subfolder3)
-for entry in os.listdir(image_dir):
-    if entry.startswith(image_file):
-        image_file = entry
-        break
-
-image_path = os.path.join(project_dir, image_subfolder1, image_subfolder2, image_subfolder3, image_file)
 
 #----------------------------
 # Load Image
 #----------------------------
 
+image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
 image = cv2.imread(image_path, cv2.IMREAD_COLOR)
 gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
@@ -48,11 +29,20 @@ red_image = image[:, :, 2]
 # Image Processing
 #----------------------------
 
+#
+# Filters
+#
+
 # Apply Gaussian blur to reduce noise
-#blurred_image = cv2.GaussianBlur(gray_image, (5, 5), 1.4)
+blurred_image = cv2.GaussianBlur(gray_image, (5, 5), 1.4)
 
 # Apply Average blur to reduce noise
-blurred_image = cv2.blur(gray_image, (100,100))
+#blurred_image = cv2.blur(gray_image, (100,100))
+
+
+#
+# Colormap
+#
 
 # Normalize the image to 0-1 range for matplotlib
 norm_image = (blurred_image- blurred_image.min()) / (blurred_image.max() - blurred_image.min())
@@ -65,40 +55,8 @@ processed_image = colormap(norm_image)[..., :3]
 processed_image_uint8 = (processed_image * 255).astype(np.uint8) # Convert to uint8 for openCV
 
 #----------------------------
-# 3D Surface Graphing
+# Contour Processing
 #----------------------------
-
-Z = blurred_image.squeeze()
-
-# Create coordinate grid
-Z_small = Z[::10, ::10]
-
-x = np.arange(Z_small.shape[1])
-y = np.arange(Z_small.shape[0])
-X, Y = np.meshgrid(x, y)
-
-# Plot
-fig = plt.figure(figsize=(12, 8))
-ax = fig.add_subplot(111, projection='3d')
-
-ax.plot_surface(X, Y, Z_small, linewidth=0, antialiased=False)
-
-ax.set_xlabel("X")
-ax.set_ylabel("Y")
-ax.set_zlabel("Z value")
-
-plt.show()
-
-#
-# Temporary Outputs
-#
-
-'''
-print(f"Original Image Shape: {image.shape}")
-print(f"Gray Image Shape: {gray_image.shape}")
-print(f"Blurred Image Shape: {blurred_image.shape}")
-print(f"Colored Image Shape: {processed_image_uint8.shape}")
-'''
 
 #
 # Canny Edge Detector
@@ -130,6 +88,15 @@ kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3,3))
 # Compute morphological gradient
 gradient = cv2.morphologyEx(binary, cv2.MORPH_GRADIENT, kernel)
 
+# Use blurred image for thresholding
+thresh = cv2.adaptiveThreshold(gradient, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                               cv2.THRESH_BINARY_INV, 15, 3)
+
+# Find contours
+contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+#print(f"Number of contours found: {len(contours)}")
+
+
 #
 # Displaying Image
 #
@@ -155,18 +122,6 @@ plt.title('Morphological Detection')
 plt.axis('off')
 
 plt.show()
-
-#----------------------------
-# Contour Processing
-#----------------------------
-
-# Use blurred image for thresholding
-thresh = cv2.adaptiveThreshold(gradient, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                               cv2.THRESH_BINARY_INV, 15, 3)
-
-# Find contours
-contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-#print(f"Number of contours found: {len(contours)}")
 
 #
 # Filtering Contours
