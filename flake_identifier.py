@@ -118,7 +118,7 @@ class Flake_Identifier():
                 4: (255, 255, 0),    # Thick flake - yellow
             }
 
-            if class_to_color == 2:
+            if predicted_class == 2:
                 save = True
 
             rect_color = class_to_color.get(predicted_class, (255, 255, 255))
@@ -146,7 +146,7 @@ class Flake_Identifier():
     def find_flakes(self, image, output=False):
 
         _, contours = flake_finder.find_flakes(image, display=False)
-        
+
         return contours
 
 '''
