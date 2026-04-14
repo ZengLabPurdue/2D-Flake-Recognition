@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import threading
 from queue import Queue
 
@@ -7,6 +8,8 @@ import time
 from datetime import datetime
 
 import math
+from tkinter import filedialog
+from tkinter import messagebox
 import cv2
 import numpy as np
 
@@ -30,6 +33,7 @@ from prior_api import Prior_Controller
 from turret_api import Turret_Controller
 import chip_edge_classifier
 import flake_identifier
+import flake_identifier_yolo
 
 DLL_PATH = os.getcwd() + r"\APIs\PriorSDK1.9.2\x64\PriorScientificSDK.dll"
 PRIOR_COM_PORT = sys.argv[1]
@@ -69,7 +73,7 @@ class App:
         self.main_frame = Frame(root, bg="#f0f0f0")
         self.main_frame.pack(fill=BOTH, expand=True)
 
-        self.map_canvas = Canvas(self.main_frame, bg="white")
+        self.map_canvas = Canvas(self.main_frame)
         self.map_canvas.pack(fill=BOTH, expand=True)
 
         self.true_map = np.zeros((3000, 3000, 3), dtype=np.uint8)
@@ -102,6 +106,11 @@ class App:
         self.auto_focus_range = 1000
         self.auto_focus_accuracy = 10
         self.auto_focus_steps = 20
+
+        self.view_chip_index = 0
+        self.view_image_index = 0
+        self.view_scan_path = None
+        self.view_folder = None
 
         self.buttons = []
         self.panels = []
@@ -144,7 +153,12 @@ class App:
 
         self.update_panels()
 
+        self.init_view_scans_panel()
+        self.view_scans_panel.place_forget()
+
         self.init_menu_bar()
+
+        self.root.bind_all("<Button-1>", self.clear_focus, add="+")
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -183,10 +197,25 @@ class App:
         menu_bar.add_cascade(label="Panels", menu=panel_menu)
 
         scan_menu = Menu(menu_bar, tearoff=0)
-        scan_menu.add_command(label="Run Full Scan", command=self.run_full_scan)
-        scan_menu.add_command(label="Run 2x Scan", command=self.run_2x_scan)
+        scan_menu.add_command(label="Run Complete Scan (1 Chip)", command=self.run_complete_scan)
+        scan_menu.add_command(label="Run Complete Scan", command=lambda: self.run_complete_scan(window=(11, 3)))
+        scan_menu.add_command(label="Run 2x Scan", command=lambda: self.run_2x_scan(full_zoom=True))
         scan_menu.add_command(label="Run 10x Scan", command=self.run_10x_scan)
         menu_bar.add_cascade(label="Scan", menu=scan_menu)
+
+        self.results_menu = Menu(menu_bar, tearoff=0)
+
+        self.results_menu.add_command(label="Open Scan...", command=self.open_scan)
+        self.results_menu.add_separator()
+
+        self.open_scan_menu = Menu(self.results_menu, tearoff=0)
+        self.open_scan_menu.add_command(label="Raw Images (2x)", command=lambda: self.set_view_folder("Raw 2x"))
+        self.open_scan_menu.add_command(label="Raw Images (10x)", command=lambda: self.set_view_folder("Raw 10x"))
+        self.open_scan_menu.add_command(label="Processed Images (10x)", command=lambda: self.set_view_folder("Processed 10x"))
+        self.open_scan_menu.add_command(label="Detected Flakes", command=lambda: self.set_view_folder("Flakes Found"))
+        self.results_menu.add_cascade(label="View Scan", state="disabled", menu=self.open_scan_menu)
+        self.results_menu.add_command(label="Classify Flakes", state="disabled", command=None)
+        menu_bar.add_cascade(label="Results", menu=self.results_menu)
 
         root.config(menu=menu_bar)
 
@@ -414,12 +443,6 @@ class App:
 
         self.root.bind("<Down>", self.on_press_backward)
         self.root.bind("<KeyRelease-Down>", self.on_release_backward)
-
-        self.root.bind("<Left>", self.on_press_left)
-        self.root.bind("<KeyRelease-Left>", self.on_release_left)
-
-        self.root.bind("<Right>", self.on_press_right)
-        self.root.bind("<KeyRelease-Right>", self.on_release_right)
         '''
         
         for r in [0, 1]:
@@ -639,7 +662,7 @@ class App:
             width=204,
             height=240
         )
-        self.objective_control_panel.place(relx=1.0, rely=0.0, anchor="ne", y=442)
+        self.objective_control_panel.place(relx=1.0, rely=0.0, anchor="ne")
 
         self.objective_control_background = Frame(
             self.objective_control_panel,
@@ -658,18 +681,18 @@ class App:
         )
         objective_control_title.place(relx=0.5, y=5, anchor="n")
 
-        self.sharpness_var = tk.StringVar()
-        self.sharpness_var.set("Objective: Unknown")
+        self.objective_var = tk.StringVar()
+        self.objective_var.set("Objective: Unknown")
 
-        self.sharpness_label = Label(
+        self.objective_label = Label(
             self.objective_control_panel,
-            textvariable=self.sharpness_var,
+            textvariable=self.objective_var,
             bg="white",
             fg="black",
             font="TkDefaultFont"
         )
 
-        self.sharpness_label.place(relx=0.5, y=40, anchor="n")
+        self.objective_label.place(relx=0.5, y=40, anchor="n")
 
         style = ttk.Style()
         style.configure("Custom.Horizontal.TScale", background="white")
@@ -718,7 +741,7 @@ class App:
         #self.change_objective(1)
 
         tc.turn_to_position(1)
-        self.sharpness_var.set(f"Objective: {1}")
+        self.objective_var.set(f"Objective: {1}")
 
         return self.objective_control_panel
 
@@ -729,7 +752,7 @@ class App:
             width=204,
             height=205
         )
-        self.focus_panel.place(relx=1.0, rely=0.0, anchor="ne", y=442)
+        self.focus_panel.place(relx=1.0, rely=0.0, anchor="ne")
 
         self.focus_background = Frame(
             self.focus_panel,
@@ -823,7 +846,114 @@ class App:
         self.buttons.append(self.auto_focus_btn)
 
         return self.focus_panel
-      
+    
+    def init_view_scans_panel(self):
+
+        self.pos_scan_name = 40
+        self.pos_chip = 70
+        self.pos_image = 100
+        self.pos_buttons = 140
+
+        self.view_scans_panel = Frame(
+            self.main_frame,
+            bg="#f0f0f0",
+            width=204,
+            height=205
+        )
+        self.view_scans_panel.place(relx=0.0, rely=0.0, anchor="nw")
+
+        self.view_scans_background = Frame(
+            self.view_scans_panel,
+            bg="white",
+            width=200,
+            height=203
+        )
+        self.view_scans_background.place(x=2, y=0)
+
+        view_scans_title = Label(
+            self.view_scans_panel,
+            text="Scan Results",
+            bg="white",
+            fg="black",
+            font=("TkDefaultFont", 13)
+        )
+        view_scans_title.place(relx=0.5, y=5, anchor="n")
+
+        self.scan_name_var = tk.StringVar()
+        self.scan_name_var.set("Scan: Not Selected")
+
+        self.scan_name_label = Label(
+            self.view_scans_panel,
+            textvariable=self.scan_name_var,
+            bg="white",
+            fg="black",
+            font="TkDefaultFont"
+        )
+        self.scan_name_label.place(relx=0.5, y=self.pos_scan_name, anchor="n")
+
+        self.chip_var = tk.StringVar()
+
+        self.chip_dropdown = ttk.Combobox(
+            self.view_scans_panel,
+            textvariable=self.chip_var,
+            state="readonly"
+        )
+
+        self.chip_dropdown.place(relx=0.5, y=self.pos_chip, anchor="n")
+
+        self.image_var = tk.StringVar()
+        self.image_var.set("Image: None")
+
+        self.image_label = Label(
+            self.view_scans_panel,
+            textvariable=self.image_var,
+            bg="white",
+            fg="black",
+            font="TkDefaultFont"
+        )
+        self.image_label.place(relx=0.5, y=self.pos_image, anchor="n")
+
+        self.views_scans_button_panel = Frame(self.view_scans_panel, bg="white", width=80, height=45)
+        self.views_scans_button_panel.place(relx=0.5, x=0, y=self.pos_buttons, anchor="n")
+        self.views_scans_button_panel.pack_propagate(False)
+
+        view_scans_controls = Frame(self.views_scans_button_panel, bg="white")
+        view_scans_controls.pack(expand=True, fill="both")
+
+        self.btn_next = ttk.Button(view_scans_controls, text="▸", style="Arrow.TButton")
+        self.btn_previous = ttk.Button(view_scans_controls, text="◂", style="Arrow.TButton")
+
+        self.btn_next.bind("<ButtonPress-1>", self.next_image)
+        self.btn_previous.bind("<ButtonPress-1>", self.previous_image)
+
+        self.root.bind("<Left>", self.previous_image)
+        self.root.bind("<Right>", self.next_image)
+
+        view_scans_controls.rowconfigure(0, weight=1)
+        view_scans_controls.columnconfigure(0, weight=1)
+        view_scans_controls.columnconfigure(1, weight=1)
+
+        self.btn_next.grid(row=0, column=1, sticky="nsew")
+        self.btn_previous.grid(row=0, column=0, sticky="nsew")
+
+    def display_chip_dropdown(self, display=True):
+
+        shift = 0 if display else -30
+
+        if display:
+            self.chip_dropdown.place(relx=0.5, y=self.pos_chip, anchor="n")
+        else:
+            self.chip_dropdown.place_forget()
+
+        self.image_label.place(relx=0.5, y=self.pos_image + shift, anchor="n")
+        self.views_scans_button_panel.place(relx=0.5, y=self.pos_buttons + shift, anchor="n")
+
+        base_height = 205
+        new_height = base_height + shift
+
+        self.view_scans_panel.config(height=new_height)
+        self.view_scans_background.config(height=new_height - 2)
+
     # ------------- Stage/Objective Control Functions -------------
 
     # XY Control Functions
@@ -832,9 +962,12 @@ class App:
         pc.set_origin()
         self.get_position()
 
-    def go_to_position(self):
+    def go_to_position(self, x=None, y=None):
         self.disable_buttons()
-        pc.go_to_pos(int(self.x_coord_var.get()), int(self.y_coord_var.get()))
+        if x is not None and y is not None:
+            pc.go_to_pos(x, y)
+        else:
+            pc.go_to_pos(int(self.x_coord_var.get()), int(self.y_coord_var.get()))
         self.get_position()
         self.enable_buttons()
 
@@ -946,10 +1079,13 @@ class App:
         pc.set_z_0()
         self.get_position()
 
-    def go_to_z_position(self):
+    def go_to_z_position(self, z=None):
         self.disable_buttons()
         global z_pos
-        pc.go_to_z_pos(int(self.z_coord_var.get()))
+        if z is not None:
+            pc.go_to_z_pos(z)
+        else:
+            pc.go_to_z_pos(int(self.z_coord_var.get()))
         self.get_position()
         self.enable_buttons()
 
@@ -1031,7 +1167,7 @@ class App:
             tc.turn_to_position(position)
             self.magnification = None
 
-        self.sharpness_var.set(f"Objective: {position}")
+        self.objective_var.set(f"Objective: {position}")
 
     def find_sharpness(self, image):
 
@@ -1071,10 +1207,10 @@ class App:
 
         z_positions = [
             z_start + i * (z_end - z_start) / steps
-            for i in range(steps+1)
+            for i in range(steps + 1)
         ]
 
-        #print(f"Speed: {pc.get_z_velocity()}, Step: {int((z_end - z_start) / steps)}")
+        print(f"Speed: {pc.get_z_velocity()}, Step: {int((z_end - z_start) / steps)}")
         #pc.set_velocity(int((z_end - z_start) / steps))
         
         curr_z = pc.get_curr_z_pos()
@@ -1091,7 +1227,7 @@ class App:
 
             sharpness = self.get_raw_sharpness(num_images=3)
 
-            #print(f"Z: {z:>12.1f} | Sharpness: {sharpness:>8.3f} | Best Sharpness: {best_sharpness:>8.3f} | Best Z: {best_z:>12.1f}")
+            print(f"Z: {z:>12.1f} | Sharpness: {sharpness:>8.3f} | Best Sharpness: {best_sharpness:>8.3f} | Best Z: {best_z:>12.1f}")
 
             if sharpness > best_sharpness:
                 best_sharpness = sharpness
@@ -1101,8 +1237,8 @@ class App:
                 if sharpness < best_sharpness - tolerance:
                     drops += 1
 
-            if drops >= 3:
-                #print("Focus peak passed")
+            if drops >= 4:
+                print("Focus peak passed")
                 break
 
         pc.go_to_z_pos(best_z)
@@ -1110,18 +1246,18 @@ class App:
         return best_z
 
     def auto_focus(self, start_range=3000, accuracy=50, steps=20):
-        #start_time = time.time()
+        start_time = time.time()
         self.disable_buttons()
         _range = start_range
         best_z = pc.get_curr_z_pos()
         while _range >= accuracy:
             best_z = self.find_best_focus(best_z-_range, best_z+_range, steps)
             pc.go_to_z_pos(best_z)
-            #self.discard_initial_frame(best_z)
-            #print(f"Best Z: {best_z:>12.1f} | Sharpness: {self.get_raw_sharpness(num_images=3):>8.3f} | Range: {_range}")
-            #print("-----------------------------------")
+            self.discard_initial_frame(best_z)
+            print(f"Best Z: {best_z:>12.1f} | Sharpness: {self.get_raw_sharpness(num_images=3):>8.3f} | Range: {_range}")
+            print("-----------------------------------")
             _range = int(_range / (steps / 2))
-        #print(f"Time taken: {time.time() - start_time:.2f}s")
+        print(f"Time taken: {time.time() - start_time:.2f}s")
         self.enable_buttons()
 
     def stop_all_motors(self):
@@ -1129,17 +1265,15 @@ class App:
 
     # ------------- Scanning Functions -------------
 
-    def run_full_scan(self):
+    def run_complete_scan(self, window=(3, 3)):
 
         start_time = time.time()
 
-        scan_path = home_dir / "Saved Images" / "Scan" / datetime.now().strftime("Full Scan (%Y-%m-%d) (%H-%M-%S)")
+        scan_path = home_dir / "Scans" / datetime.now().strftime("Full Scan (%Y-%m-%d) (%H-%M-%S)")
 
-        center_x, center_y, scale_2x = self.run_2x_scan(scan_path=scan_path)
+        center_x, center_y, scale_2x = self.run_2x_scan(scan_path=scan_path, window=window)
         chips = self.find_chips(self.filter_map)
         scan_coordinates = self.generate_10x_scan_coordinates(chips, center_x, center_y, scale_2x)
-
-        self.change_objective(2)
 
         image_queue = Queue(maxsize=200)
 
@@ -1159,15 +1293,20 @@ class App:
         print("Full scan finished!")
         print(f"Time taken: {time.time() - start_time:.2f}s")
 
-    def run_2x_scan(self, scan_path=None, zoom=6):
+        self.go_to_position(x = 0,  y = 0)
+        self.change_objective(1)
+
+    def run_2x_scan(self, window=(3, 3), scan_path=None, zoom=6, full_scan=False, full_zoom=False):
 
         print("2x scan running...")
+
+        self.change_objective(1)
 
         self.set_view("Map", True)
 
         start_time = time.time()
         if scan_path is None:
-            path = home_dir / "Saved Images" / "Scan" / datetime.now().strftime("2x (%Y-%m-%d) (%H-%M-%S)")
+            path = home_dir / "Scans" / "2x" / datetime.now().strftime("2x (%Y-%m-%d) (%H-%M-%S)")
         else:
             path = scan_path / "All Images" / "2x"
 
@@ -1181,7 +1320,12 @@ class App:
         center_y = y_pos
 
         #coords, total_frames = self.generate_spiral_coords(max(num_steps_x, num_steps_y))
-        coords, total_frames = self.generate_rect_coords(3, 3)
+        coords, total_frames = self.generate_rect_coords(window[1], window[0])
+
+        zoom = max(zoom, int(self.hcam.get_Size()[1] / (self.true_map.shape[0] / window[1])), int(self.hcam.get_Size()[0] / (self.true_map.shape[1] / window[0])))
+        
+        if full_zoom:
+            zoom = max(int(self.hcam.get_Size()[1] / (self.true_map.shape[0] / window[1])), int(self.hcam.get_Size()[0] / (self.true_map.shape[1] / window[0])))
 
         i = 1
         for offset_x, offset_y in coords:
@@ -1196,7 +1340,7 @@ class App:
             img = self.capture_frame()
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-            image_path = path / f"img_2x_R_{i}.png"
+            image_path = path / "Raw" / f"img_2x_{i}.png"
             image_path.parent.mkdir(parents=True, exist_ok=True)
             self.save_image(image=img, filename=image_path)
 
@@ -1205,9 +1349,9 @@ class App:
 
             if self.view_mode == "Camera View":
                 if self.filter_var.get():
-                    self.display_live_image(cv2.cvtColor(chip_edge_classifier.chip_filter(img), cv2.COLOR_GRAY2RGB))
+                    self.display_image(cv2.cvtColor(chip_edge_classifier.chip_filter(img), cv2.COLOR_GRAY2RGB))
                 else:
-                    self.display_live_image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                    self.display_image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
 
             map_x = int(self.filter_map.shape[1] / 2 - (offset_x + 0.5) * img_binary_rgb.shape[1] / zoom)
             map_y = int(self.filter_map.shape[0] / 2 + (offset_y - 0.5) * img_binary_rgb.shape[0] / zoom)
@@ -1233,21 +1377,32 @@ class App:
 
         self.scan_running = False
         pc.go_to_pos(center_x, center_y)
-        print("Scan finished!")
+        print("2x scan imaging finished!")
+        print("Time taken: {:.2f}s".format(time.time() - start_time))
 
         return center_x, center_y, zoom
 
-    def run_10x_scan(self, scan_coordinates_10x, scan_path=None, image_queue=None, zoom=4):
+    def run_10x_scan(self, scan_coordinates_10x=None, scan_path=None, image_queue=None, zoom=4, full_scan=False):
+
+        start_time = time.time()
 
         self.set_view("Map", False)
 
+        self.change_objective(2)
+
         if scan_path is None:
-            path = home_dir / "Saved Images" / "Scan" / datetime.now().strftime("10x (%Y-%m-%d) (%H-%M-%S)")
+            path = home_dir / "Scans" / "10x" / datetime.now().strftime("10x (%Y-%m-%d) (%H-%M-%S)")
         else:
             path = scan_path / "All Images" / "10x"
 
+        if scan_coordinates_10x is None:
+            x, y, _ = pc.get_curr_pos()
+            scan_coordinates_10x = [[x, y, 10, 10]]
+
         i = 0
         for coordinates in scan_coordinates_10x:
+
+            chip_time = time.time()
 
             i += 1
             self.true_map = np.zeros((3000, 3000, 3), dtype=np.uint8)
@@ -1277,7 +1432,7 @@ class App:
                 img = self.capture_frame()
                 img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-                image_path = path / f"Chip {i} ({center_x}, {center_y})" / f"img_10x_R_{j}.png"
+                image_path = path / f"Chip {i} ({center_x}, {center_y})" / "Raw" / f"img_10x_{j}.png"
                 image_path.parent.mkdir(parents=True, exist_ok=True)
                 self.save_image(image=img, filename=image_path)
 
@@ -1287,7 +1442,7 @@ class App:
                 if self.view_mode == "Camera View":
                     if self.filter_var.get():
                         self.filter_var.set(False)
-                    self.root.after(0, lambda img=img: self.display_live_image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)))
+                    self.root.after(0, lambda img=img: self.display_image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)))
 
                 map_x = int(self.filter_map.shape[1] / 2 - (offset_x + 0.5) * img_rgb.shape[1] / max_zoom)
                 map_y = int(self.filter_map.shape[0] / 2 + (offset_y - 0.5) * img_rgb.shape[0] / max_zoom)
@@ -1306,9 +1461,15 @@ class App:
 
                 self.display_map()
 
+            print("Chip {} imaging finished!".format(i))
+            print("Time taken: {:.2f}s".format(time.time() - chip_time))
+
         if image_queue is not None:
             image_queue.put(None)
         self.scan_running = False
+
+        print("10x scan imaging finished!")
+        print("Time taken: {:.2f}s".format(time.time() - start_time))
 
     def find_chips(self, binary_map):
         binary_map = (self.filter_map > 0).astype("uint8") * 255
@@ -1434,9 +1595,59 @@ class App:
             img = cv2.imread(str(img_path))
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             scanned_img, _, save = fi.identify_flakes(img)
-            out_path = img_path.with_name(img_path.name.replace("R", "S"))
+            out_path = img_path.parent.parent / "Processed" / img_path.name
             self.save_image(cv2.cvtColor(scanned_img, cv2.COLOR_RGB2BGR), save_dir=out_path.parent, filename=out_path.name)
+            if save:
+                chip_folder = img_path.parent.parent
+                scan_root = chip_folder.parent.parent.parent        
+                flakes_dir = scan_root / "Flakes Found" / chip_folder.name
+                flakes_dir.mkdir(parents=True, exist_ok=True)       
+                self.save_image(cv2.cvtColor(scanned_img, cv2.COLOR_RGB2BGR), save_dir=flakes_dir, filename=img_path.name)
             image_queue.task_done()
+
+    # ------------- View Scan Functions -------------
+
+    def previous_image(self, event=None):
+
+        if self.view_mode != "Scan Results":
+            return
+
+        if self.image_files is None:
+            return
+
+        self.view_image_index = (self.view_image_index - 1) % len(self.image_files)
+
+        self.image_var.set(f"Image: {self.image_files[self.view_image_index].name}")
+
+        img_path = self.image_files[self.view_image_index]
+
+        img = cv2.imread(str(img_path))
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        self.display_image(img)
+
+        self.root.focus_set()
+
+    def next_image(self, event=None):
+        
+        if self.view_mode != "Scan Results":
+            return
+
+        if self.image_files is None:
+            return
+
+        self.view_image_index = (self.view_image_index + 1) % len(self.image_files)
+
+        self.image_var.set(f"Image: {self.image_files[self.view_image_index].name}")
+
+        img_path = self.image_files[self.view_image_index]
+
+        img = cv2.imread(str(img_path))
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        self.display_image(img)
+
+        self.root.focus_set()
 
     # ------------- Display Functions -------------
 
@@ -1450,7 +1661,10 @@ class App:
             self.map_canvas.pack(fill=BOTH, expand=True) # Show map canvas
             self.img_label.pack_forget() # Hide image label
             pass
-        else:
+        elif mode == "Camera View":
+            self.img_label.pack(fill=BOTH, expand=True)
+            self.map_canvas.pack_forget() # Hide map canvas
+        elif mode == "Scan Results":
             self.img_label.pack(fill=BOTH, expand=True)
             self.map_canvas.pack_forget() # Hide map canvas
 
@@ -1515,26 +1729,27 @@ class App:
         y_center = canvas_height // 2
         self.map_canvas.create_image(x_center, y_center, image=self.tk_map_image, anchor="center")
 
-    def display_live_image(self, img_rgb):
+    def display_image(self, img_rgb):
         h, w = img_rgb.shape[:2]
 
         cx = w // 2
         cy = h // 2
 
-        if self.magnification == "2x":
-            crop_w = int(w * CENTER_CROP_WIDTH_RATIO_2X)
-            crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_2X)
-        elif self.magnification == "10x":
-            crop_w = int(w * CENTER_CROP_WIDTH_RATIO_10X)
-            crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_10X)
+        if self.view_mode == "Camera View":
+            if self.magnification == "2x":
+                crop_w = int(w * CENTER_CROP_WIDTH_RATIO_2X)
+                crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_2X)
+            elif self.magnification == "10x":
+                crop_w = int(w * CENTER_CROP_WIDTH_RATIO_10X)
+                crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_10X)
 
-        x1 = cx - crop_w // 2
-        y1 = cy - crop_h // 2
-        x2 = cx + crop_w // 2
-        y2 = cy + crop_h // 2
+            x1 = cx - crop_w // 2
+            y1 = cy - crop_h // 2
+            x2 = cx + crop_w // 2
+            y2 = cy + crop_h // 2
 
-        img_rgb = img_rgb.copy()
-        cv2.rectangle(img_rgb, (x1, y1), (x2, y2), (0, 255, 0), 5)
+            img_rgb = img_rgb.copy()
+            cv2.rectangle(img_rgb, (x1, y1), (x2, y2), (0, 255, 0), 5)
 
         img_pil = Image.fromarray(img_rgb)
 
@@ -1593,6 +1808,112 @@ class App:
             btn.state(["disabled"])
         self.root.update_idletasks()
 
+    def open_scan(self):
+        folder = filedialog.askdirectory(title="Select Scan Folder")
+        if not folder:
+            return
+
+        path = Path(folder)
+        folder_name = path.name
+
+        pattern = r"^Full Scan \(\d{4}-\d{2}-\d{2}\) \(\d{2}-\d{2}-\d{2}\)$"
+
+        if not re.match(pattern, folder_name):
+            messagebox.showwarning(
+                "Invalid Folder",
+                "Selected folder is not a valid scan folder."
+            )
+            return
+
+        self.view_scan_path = path
+
+        self.scan_name_var.set(f"{folder_name}")
+
+        self.results_menu.entryconfig("View Scan", state="normal")
+        self.results_menu.entryconfig("Classify Flakes", state="normal") 
+
+        messagebox.showinfo(
+            "Scan Loaded",
+            f"Scan loaded successfully!"
+        )
+    
+    def set_view_folder(self, selected_view):
+
+        self.set_view("Scan Results", False)
+        
+        self.view_scans_panel.place(relx=0.0, rely=0.0, anchor="nw")
+        
+        self.view_chip_index = 0
+        self.view_image_index = 0
+        
+        base_path = self.view_scan_path / "All Images"
+
+        if selected_view == "Raw 2x":
+            self.view_folder = base_path / "2x" / "Raw"
+            self.display_chip_dropdown(False)
+
+        elif selected_view == "Raw 10x":
+            chip_folder = self.get_subfolder(base_path / "10x", self.view_chip_index).name
+            self.view_folder = base_path / "10x" / chip_folder / "Raw"
+            self.display_chip_dropdown(True)
+            self.populate_chips_dropdown()            
+
+        elif selected_view == "Processed 10x":
+            chip_folder = self.get_subfolder(base_path / "10x", self.view_chip_index).name
+            self.view_folder = base_path / "10x" / chip_folder / "Processed"
+            self.display_chip_dropdown(True)
+            self.populate_chips_dropdown() 
+
+        elif selected_view == "Flakes Found":
+            chip_folder = self.get_subfolder(self.view_scan_path / "Flakes Found", self.view_chip_index).name
+            self.view_folder = self.view_scan_path / "Flakes Found" / chip_folder
+            self.display_chip_dropdown(True)
+            self.populate_chips_dropdown()
+
+        self.image_files = sorted([p for p in self.view_folder.iterdir() if p.suffix.lower() in [".png", ".jpg", ".jpeg", ".bmp"]], key=self.image_sort_key)
+
+        img_path = self.image_files[self.view_image_index]
+
+        img = cv2.imread(str(img_path))
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        self.display_image(img)
+        self.root.update()
+
+    def populate_chips_dropdown(self):
+        chip_root = self.view_scan_path / "All Images" / "10x"
+
+        if not chip_root.exists():
+            self.chip_dropdown["values"] = []
+            self.chip_var.set("No chips found")
+            return
+
+        chips = sorted([p.name for p in chip_root.iterdir() if p.is_dir()])
+
+        self.chip_dropdown["values"] = chips
+
+        if chips:
+            self.chip_var.set(chips[0])
+        else:
+            self.chip_var.set("No chips found")
+
+    def image_sort_key(self, p):
+        match = re.search(r'_(\d+)\.', p.name)
+        return int(match.group(1)) if match else -1
+
+    def get_subfolder(self, path, index):
+        subfolders = [p for p in path.iterdir() if p.is_dir()]
+        subfolders = sorted(subfolders)
+        return subfolders[index] if 0 <= index < len(subfolders) else None
+
+    def clear_focus(self, event):
+        widget = event.widget
+
+        if isinstance(widget, (ttk.Combobox, ttk.Entry)):
+            return
+
+        self.root.focus_set()
+
     # ------------- Camera Handling -------------
 
     @staticmethod
@@ -1617,9 +1938,9 @@ class App:
             
             if self.view_mode == "Camera View" and not self.scan_running:
                 if self.filter_var.get():
-                    self.display_live_image(cv2.cvtColor(chip_edge_classifier.chip_filter(img), cv2.COLOR_GRAY2RGB))
+                    self.display_image(cv2.cvtColor(chip_edge_classifier.chip_filter(img), cv2.COLOR_GRAY2RGB))
                 else:
-                    self.display_live_image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                    self.display_image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
     
             self.find_sharpness(self.current_frame)
 
@@ -1634,7 +1955,7 @@ class App:
 
         self.hcam = amcam.Amcam.Open(cams[0].id)
 
-        self.hcam.put_eSize(2)
+        self.hcam.put_eSize(1)
 
         self.hcam.put_AutoExpoEnable(True)
         self.hcam.put_AutoExpoTarget(DEFAULT_EXPOSURE)
@@ -1681,7 +2002,7 @@ class App:
             image = self.current_frame
 
         if save_dir is None:
-            save_dir = home_dir / "Saved Images" / "Selected Images"
+            save_dir = home_dir / "Saved Images"
         else:
             save_dir = Path(save_dir)
 

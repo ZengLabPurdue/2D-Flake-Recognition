@@ -1,6 +1,6 @@
 import cv2
 from tkinter import filedialog
-import util
+import Util
 import numpy as np
 import time
 import matplotlib.pyplot as plt
@@ -127,13 +127,13 @@ total_time = 0
 totalProgress = 100
 start_time = time.time()
 
-util.progress_bar(0, totalProgress, start_time)
+Util.progress_bar(0, totalProgress, start_time)
 for i in range(100):
     start = time.perf_counter_ns()
     result = find_nearest_colors(image, reference_colors, output_values=output_values)
     #window_sums = scan_windows(result)
     end = time.perf_counter_ns()
     total_time += end-start
-    util.progress_bar(i+1, totalProgress, start_time)
+    Util.progress_bar(i+1, totalProgress, start_time)
 print(f"Average Time: {int(total_time/100)}ns")
 '''

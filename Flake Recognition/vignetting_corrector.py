@@ -2,19 +2,11 @@ import cv2
 import numpy as np
 from tkinter import filedialog
 from data_visualizer import DataVisualizer
-import util
+import Util
 import matplotlib.pyplot as plt
-
-#----------------------------
-# Load Image
-#----------------------------
 
 image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
 flatfield_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
-
-#----------------------------
-# Vignetting Correction Function
-#----------------------------
 
 def vignetting_correction_direct_single_channel(image_path, flatfield_path):
     image = cv2.imread(image_path).astype(np.float32)
@@ -165,4 +157,4 @@ plt.tight_layout()
 
 corrected_image_gray = cv2.cvtColor(corrected_image, cv2.COLOR_RGB2GRAY)
 DataVisualizer.surface_graphing(corrected_image_gray)
-util.save_image(corrected_image)
+Util.save_image(corrected_image)

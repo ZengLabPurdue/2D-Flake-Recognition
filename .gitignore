@@ -1,0 +1,8 @@
+# Ignore entire labeled data
+Labeled Data/
+
+# Ignore scans
+App/Scans/
+
+# Ignore saved images
+App/Saved Images/

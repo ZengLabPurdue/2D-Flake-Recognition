@@ -160,12 +160,26 @@ class DataLabelingApp:
         y_step = 60
 
         for i, text in enumerate(labels):
+            key = str(i + 1)
+
             btn = ttk.Button(
                 self.left_panel,
-                text=text,
-                style="Normal.TButton",
-                command=lambda t=text: self.save_contour(self.masked_background, t, output=True)
+                text=f"{key}: {text}", 
+                style="Normal.TButton"
             )
+
+            def make_callback(t=text, b=btn):
+                def callback(event=None):
+                    b.state(["pressed"])
+                    self.left_panel.after(100, lambda: b.state(["!pressed"]))
+                    self.save_contour(t.lower().replace(" ", "_"), output=True)
+                return callback
+
+            cb = make_callback()
+
+            btn.config(command=cb)
+
+            self.root.bind(f"<KeyPress-{key}>", cb)
 
             btn.place(relx=0.5, y=y_start + i * y_step, anchor="n")
             self.buttons[text] = btn
@@ -399,9 +413,10 @@ class DataLabelingApp:
 
         now = datetime.now()
         timestamp = now.strftime("%Y%m%d%H%M%S") + f"{now.microsecond // 1000:03d}"
-        filepath = self.save_folder_path / f"{timestamp}_{label}.png"
+        filepath = self.save_folder_path / f"{label}_{timestamp}.png"
 
         img = np.array(self.current_image).copy()
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         x, y, x2, y2 = self.find_contour_bounded_box(img, self.contours[self.contour_index])
         cropped = img[y:y2, x:x2]
 
@@ -409,6 +424,8 @@ class DataLabelingApp:
 
         if output:
             print(f"Image saved to {filepath}")
+
+        self.next_contour()
 
     def choose_save_folder(self):
 
