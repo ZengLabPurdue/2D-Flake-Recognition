@@ -322,15 +322,30 @@ class DataLabelingApp2:
                      command=lambda _: self._reload_contours(),
                      ).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        self.yellow_hue_lo_var  = tk.IntVar(value=15)
-        self.yellow_hue_hi_var  = tk.IntVar(value=38)
-        self.yellow_sat_min_var = tk.IntVar(value=60)
-        self.yellow_val_min_var = tk.IntVar(value=80)
+        self.yellow_hue_lo_var   = tk.IntVar(value=15)
+        self.yellow_hue_hi_var   = tk.IntVar(value=38)
+        self.yellow_sat_min_var  = tk.IntVar(value=60)
+        self.yellow_val_min_var  = tk.IntVar(value=80)
 
         _yscale(lf_hover, "Hue lo (0–90):",   self.yellow_hue_lo_var,  0,  90, 1)
         _yscale(lf_hover, "Hue hi (0–90):",   self.yellow_hue_hi_var,  0,  90, 1)
         _yscale(lf_hover, "Sat min (0–255):", self.yellow_sat_min_var, 0, 255, 1)
         _yscale(lf_hover, "Val min (0–255):", self.yellow_val_min_var, 0, 255, 1)
+
+        ttk.Separator(lf_hover, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 4))
+
+        self.filter_yellow_interior_var = tk.IntVar(value=0)
+        tk.Checkbutton(
+            lf_hover,
+            text="Drop yellow-interior contours",
+            variable=self.filter_yellow_interior_var,
+            onvalue=1, offvalue=0,
+            command=self._reload_contours,
+            **hover_cb_kw,
+        ).pack(fill=tk.X)
+
+        self.yellow_interior_pct_var = tk.IntVar(value=50)
+        _yscale(lf_hover, "Interior % (0–100):", self.yellow_interior_pct_var, 1, 100, 1)
 
 
         lf_show = ttk.LabelFrame(
@@ -678,6 +693,8 @@ class DataLabelingApp2:
             yellow_hue_hi=int(self.yellow_hue_hi_var.get()),
             yellow_sat_min=int(self.yellow_sat_min_var.get()),
             yellow_val_min=int(self.yellow_val_min_var.get()),
+            filter_yellow_interior=bool(self.filter_yellow_interior_var.get()),
+            yellow_interior_pct=int(self.yellow_interior_pct_var.get()),
         )
 
     def _load_contours_for_current_image(self):

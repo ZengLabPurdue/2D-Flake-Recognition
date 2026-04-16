@@ -54,6 +54,29 @@ def _build_yellow_mask(image_bgr, hue_lo=15, hue_hi=38, sat_min=60, val_min=80):
     return (h >= hue_lo) & (h <= hue_hi) & (s >= sat_min) & (v >= val_min)
 
 
+def _filter_interior_yellow(contours, image_bgr, hue_lo=15, hue_hi=38, interior_pct=50):
+    """
+    Drop contours where >= interior_pct% of interior pixels fall in the yellow hue band.
+    Based on the approach in flake_extraction_pipeline.py.
+    """
+    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    H = hsv[:, :, 0]
+    img_h, img_w = image_bgr.shape[:2]
+    kept = []
+    for c in contours:
+        mask = np.zeros((img_h, img_w), dtype=np.uint8)
+        cv2.drawContours(mask, [c], -1, 255, -1)
+        interior_H = H[mask > 127]
+        n = len(interior_H)
+        if n < 30:
+            kept.append(c)
+            continue
+        in_range = np.sum((interior_H >= hue_lo) & (interior_H <= hue_hi))
+        if (in_range / n) < (interior_pct / 100.0):
+            kept.append(c)
+    return kept
+
+
 def find_flakes(
     image_bgr,
     edge_threshold=10,
@@ -65,6 +88,8 @@ def find_flakes(
     yellow_hue_hi=38,
     yellow_sat_min=60,
     yellow_val_min=80,
+    filter_yellow_interior=False,
+    yellow_interior_pct=50,
 ):
 
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
@@ -98,6 +123,12 @@ def find_flakes(
     area_filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) >= area_threshold]
     if filter_chip_boundary:
         area_filtered_contours = _filter_chip_boundary_contours(area_filtered_contours, img_w, img_h)
+    if filter_yellow_interior:
+        area_filtered_contours = _filter_interior_yellow(
+            area_filtered_contours, image_bgr,
+            hue_lo=yellow_hue_lo, hue_hi=yellow_hue_hi,
+            interior_pct=yellow_interior_pct,
+        )
 
     contour_img = image_rgb.copy()
     background_img = image_rgb.copy()
