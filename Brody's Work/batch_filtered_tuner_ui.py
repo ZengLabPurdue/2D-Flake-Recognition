@@ -127,13 +127,31 @@ class BatchFilteredTunerApp:
             cb.pack(anchor=tk.W, padx=(0, 4))
             var.trace_add("write", on_check)
         self.params["_edge_checks"] = self._edge_check_vars
-        make_slider(params_frame, "Blur sigma", "blur_sigma", 0.1, 2.0, 0.6)
+        make_slider(params_frame, "Blur sigma", "blur_sigma", 0, 2.0, 0.6)
+        self.combine_canny_var = tk.BooleanVar(value=False)
+        cb_combine = ttk.Checkbutton(
+            params_frame, text="Combine canny low (low + high)", variable=self.combine_canny_var,
+            command=lambda: (self._schedule_update(), self._toggle_canny_low_sliders())
+        )
+        cb_combine.pack(anchor=tk.W, pady=2)
+        self.combine_canny_var.trace_add("write", lambda *a: self._toggle_canny_low_sliders())
+        self._canny_low_frame = ttk.Frame(params_frame)
+        make_slider(self._canny_low_frame, "Canny low (down)", "canny_low_low", 0, 50, 0, "%d")
+        make_slider(self._canny_low_frame, "Canny low (up)", "canny_low_high", 0, 100, 100, "%d")
+        self._canny_low_frame.pack(fill=tk.X, pady=2)
         make_slider(params_frame, "Canny low", "canny_low", 0, 100, 10, "%d")
-        make_slider(params_frame, "Canny high", "canny_high", 50, 200, 50, "%d")
+        ttk.Label(params_frame, text="(used when combine off)", font=("", 8)).pack(anchor=tk.W)
+        make_slider(params_frame, "Canny high", "canny_high", 0, 200, 50, "%d")
         make_slider(params_frame, "Min area (Canny)", "min_area", 0, 100, 0, "%d")
         make_slider(params_frame, "Edge threshold", "edge_threshold", 0, 150, 50, "%d")
         ttk.Label(params_frame, text="(0=no threshold for non-Canny)", font=("", 8)).pack(anchor=tk.W)
         make_slider(params_frame, "Min area (contour)", "min_area_contour", 0, 1000, 200, "%d")
+        self.filter_nested_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            params_frame, text="Filter nested contours", variable=self.filter_nested_var,
+            command=self._schedule_update
+        ).pack(anchor=tk.W, pady=2)
+        ttk.Label(params_frame, text="(remove contours inside larger ones)", font=("", 8)).pack(anchor=tk.W)
         ttk.Label(params_frame, text="Preprocessing").pack(anchor=tk.W)
         self.preprocessing_var = tk.StringVar(value="full")
         preproc_combo = ttk.Combobox(
@@ -155,10 +173,10 @@ class BatchFilteredTunerApp:
         self._rebuild_method_options()
 
         ttk.Label(params_frame, text="Gap closing", font=("", 11, "bold")).pack(anchor=tk.W, pady=(12, 4))
-        make_slider(params_frame, "Bridge gap factor", "bridge_gap_factor", 0.05, 0.35, 0.15)
-        make_slider(params_frame, "Force-close factor", "force_close_factor", 0.1, 0.5, 0.3)
-        make_slider(params_frame, "Line thickness", "line_thickness", 2, 8, 4, "%d")
-        make_slider(params_frame, "Close kernel div", "close_kernel_divisor", 50, 200, 100, "%d")
+        make_slider(params_frame, "Bridge gap factor", "bridge_gap_factor", 0, 0.35, 0.15)
+        make_slider(params_frame, "Force-close factor", "force_close_factor", 0, 0.5, 0.3)
+        make_slider(params_frame, "Line thickness", "line_thickness", 0, 8, 4, "%d")
+        make_slider(params_frame, "Close kernel div", "close_kernel_divisor", 0, 200, 100, "%d")
 
         ttk.Label(params_frame, text="Border / morph", font=("", 11, "bold")).pack(anchor=tk.W, pady=(12, 4))
         make_slider(params_frame, "Morph margin", "morph_margin", 0, 30, 15, "%d")
@@ -166,6 +184,15 @@ class BatchFilteredTunerApp:
 
         ttk.Label(params_frame, text="2x2 binning (always on)", font=("", 9), foreground="gray").pack(anchor=tk.W, pady=4)
         self.params["binning"] = tk.BooleanVar(value=True)
+
+        ttk.Label(params_frame, text="Color filters (contour selection)", font=("", 11, "bold")).pack(anchor=tk.W, pady=(12, 4))
+        ttk.Label(params_frame, text="Keep contours passing ANY checked filter", font=("", 9)).pack(anchor=tk.W)
+        self.filter_yellow_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(params_frame, text="Yellow (HSV V > 70)", variable=self.filter_yellow_var, command=self._schedule_update).pack(anchor=tk.W, padx=(0, 4))
+        self.filter_blue_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(params_frame, text="Blue (HSL H > 100°)", variable=self.filter_blue_var, command=self._schedule_update).pack(anchor=tk.W, padx=(0, 4))
+        self.filter_good_flake_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(params_frame, text="Good flake (RGB G < 130)", variable=self.filter_good_flake_var, command=self._schedule_update).pack(anchor=tk.W, padx=(0, 4))
 
         ttk.Button(params_frame, text="Update Now", command=self._update_now_and_save).pack(pady=12)
 
@@ -190,6 +217,13 @@ class BatchFilteredTunerApp:
 
         self.status_var = tk.StringVar(value="Load an image to start (settings for batch_filtered_sensitive_overlays_2x2)")
         ttk.Label(main, textvariable=self.status_var).pack(anchor=tk.W, pady=4)
+
+    def _toggle_canny_low_sliders(self):
+        if getattr(self, "combine_canny_var", None) and getattr(self, "_canny_low_frame", None):
+            if self.combine_canny_var.get():
+                self._canny_low_frame.pack(fill=tk.X, pady=2)
+            else:
+                self._canny_low_frame.pack_forget()
 
     def _get_first_checked_method(self) -> str:
         """Return the first checked edge method key, or canny_h if none."""
@@ -258,6 +292,10 @@ class BatchFilteredTunerApp:
         p["min_area"].set(loaded.get("min_area", 0))
         p["edge_threshold"].set(loaded.get("edge_threshold", 50))
         p["min_area_contour"].set(loaded.get("min_area_contour", 200))
+        self.filter_nested_var.set(loaded.get("filter_nested_contours", False))
+        self.filter_yellow_var.set(loaded.get("filter_yellow", False))
+        self.filter_blue_var.set(loaded.get("filter_blue", False))
+        self.filter_good_flake_var.set(loaded.get("filter_good_flake", False))
         p["bridge_gap_factor"].set(loaded.get("bridge_gap_factor", 0.15))
         p["force_close_factor"].set(loaded.get("force_close_factor", 0.3))
         p["line_thickness"].set(loaded.get("line_thickness", 4))
@@ -265,6 +303,12 @@ class BatchFilteredTunerApp:
         p["morph_margin"].set(loaded.get("morph_margin", 15))
         p["corner_radius"].set(loaded.get("corner_radius", 2))
         p["binning"].set(True)
+        self.combine_canny_var.set(loaded.get("combine_canny_low_range", False))
+        if "canny_low_low" in p:
+            p["canny_low_low"].set(loaded.get("canny_low_low", 0))
+        if "canny_low_high" in p:
+            p["canny_low_high"].set(loaded.get("canny_low_high", 100))
+        self._toggle_canny_low_sliders()
 
     def _try_load_first_image(self):
         if DEFAULT_IMAGE_DIR.exists():
@@ -311,11 +355,21 @@ class BatchFilteredTunerApp:
             "edge_methods": edge_methods,
             "preprocessing": preproc,
             "blur_sigma": p["blur_sigma"].get(),
+            "combine_canny_low_range": self.combine_canny_var.get(),
+            "canny_low_low": int(p["canny_low_low"].get()) if "canny_low_low" in p else 0,
+            "canny_low_high": int(p["canny_low_high"].get()) if "canny_low_high" in p else 100,
             "canny_low": int(p["canny_low"].get()),
             "canny_high": int(p["canny_high"].get()),
             "min_area": int(p["min_area"].get()),
             "edge_threshold": int(p["edge_threshold"].get()),
             "min_area_contour": int(p["min_area_contour"].get()),
+            "filter_nested_contours": self.filter_nested_var.get(),
+            "filter_yellow": self.filter_yellow_var.get(),
+            "filter_blue": self.filter_blue_var.get(),
+            "filter_good_flake": self.filter_good_flake_var.get(),
+            "yellow_v_min": 70,
+            "blue_h_min": 100,
+            "good_flake_g_max": 130,
             "bridge_gap_factor": p["bridge_gap_factor"].get(),
             "force_close_factor": p["force_close_factor"].get(),
             "line_thickness": int(p["line_thickness"].get()),

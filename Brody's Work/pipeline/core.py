@@ -173,7 +173,8 @@ class ContourPipeline:
                 all_c.append(c)
 
         from batch_robust_contours_and_masks import filter_nested_contours
-        all_c = filter_nested_contours(all_c)
+        if params.get("filter_nested_contours", False):
+            all_c = filter_nested_contours(all_c)
 
         # Scale to original and filter by area
         if scale_contours_to_original and use_binning:
@@ -189,6 +190,19 @@ class ContourPipeline:
         min_area_contour = params.get("min_area_contour", 0)
         if min_area_contour > 0:
             scaled = [c for c in scaled if cv2.contourArea(c) >= min_area_contour]
+
+        # Color filter (yellow/blue/good flake)
+        from .color_filters import filter_contours_by_color
+        scaled = filter_contours_by_color(
+            orig,
+            scaled,
+            filter_yellow=params.get("filter_yellow", False),
+            filter_blue=params.get("filter_blue", False),
+            filter_good_flake=params.get("filter_good_flake", False),
+            yellow_v_min=params.get("yellow_v_min", 70),
+            blue_h_min=params.get("blue_h_min", 100),
+            good_flake_g_max=params.get("good_flake_g_max", 130),
+        )
 
         # Build outputs
         overlay = orig.copy()
@@ -231,8 +245,8 @@ class ContourPipeline:
         diag = int(np.hypot(bin_h, bin_w))
         bridge_factor = params.get("bridge_gap_factor", 0.15)
         force_factor = params.get("force_close_factor", 0.3)
-        line_thick = params.get("line_thickness", 4)
-        close_div = params.get("close_kernel_divisor", 100)
+        line_thick = max(1, int(params.get("line_thickness", 4)))
+        close_div = max(1, int(params.get("close_kernel_divisor", 100)))
         morph_margin = params.get("morph_margin", 15)
         corner_rad = params.get("corner_radius", 2)
 

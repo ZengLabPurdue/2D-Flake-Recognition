@@ -18,15 +18,12 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from canny_filter_tuner import compute_filtered_canny
-from edge_to_contour_methods import contours_guaranteed_closed
-from preprocess import clahe_then_nlmeans
-from batch_robust_contours_and_masks import filter_nested_contours
+from batch_filtered_sensitive_overlays_2x2 import load_filtered_overlay_params
 from extract_background import extract_background
+from pipeline import ContourPipeline
 
 MIN_AREA = 800
 BBOX_PADDING = 20  # Pixels around each bounding box
-CONTOURS_SOURCE_DIR = Path("images/filtered_sensitive_overlays")
 ROBUST_CONTOURS_DIR = Path("robust_contours_and_masks_no_gap_close")
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
 N_COLOR_CLUSTERS = 3  # For k-means on flake colors
@@ -64,53 +61,31 @@ def filter_hsv_contours(contours: list, img: np.ndarray) -> list:
     return filtered
 
 
-def load_contours_from_filtered_overlays(stem: str, contours_dir: Path):
-    """Load contours from {stem}_binned_filtered_contours.png. Returns list of contours or None if not found."""
-    contours_path = contours_dir / f"{stem}_binned_filtered_contours.png"
-    if not contours_path.exists():
-        return None
-    img = np.array(Image.open(contours_path))
-    if img.ndim == 3:
-        img = img[:, :, 0]  # grayscale from first channel
-    _, binary = cv2.threshold(img.astype(np.uint8), 127, 255, cv2.THRESH_BINARY)
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    return [c for c in contours if cv2.contourArea(c) >= MIN_AREA]
-
-
-def get_filtered_contours(
+def get_filtered_contours_and_edges(
     original_img: np.ndarray,
     stem: str,
     contours_source_dir: Path = None,
     apply_hsv_filter: bool = True,
-) -> list:
-    """Load contours from filtered sensitive overlays, or compute via pipeline if not available."""
-    contours_dir = contours_source_dir or CONTOURS_SOURCE_DIR
+) -> tuple[list, np.ndarray | None]:
+    """
+    Run pipeline (preprocess + edge detection) to get contours and edges fresh each time.
+    Returns (contours, edges). edges may be at binned resolution.
+    """
     orig = original_img.copy()
     if orig.ndim == 2:
         orig = np.stack([orig, orig, orig], axis=-1)
     if orig.shape[2] == 4:
         orig = orig[:, :, :3]
-    orig_h, orig_w = orig.shape[:2]
-
-    all_contours = load_contours_from_filtered_overlays(stem, contours_dir)
-    if all_contours is None:
-        # Fallback: compute contours via pipeline
-        work = np.clip(orig, 0, 255).astype(np.uint8) if orig.dtype != np.uint8 else orig.copy()
-        work = cv2.medianBlur(work, 3)
-        preprocessed = clahe_then_nlmeans(work)
-        edges, _, _ = compute_filtered_canny(
-            preprocessed, blur_sigma=0.6, canny_low=10, canny_high=50, min_area=10
-        )
-        all_contours = contours_guaranteed_closed(
-            edges, bridge_first=True, bridge_max_gap=40,
-            min_area=0, line_thickness=2, force_close_max_gap=40,
-        )
-        all_contours = filter_nested_contours(all_contours)
-        all_contours = [c for c in all_contours if cv2.contourArea(c) >= MIN_AREA]
-
+    orig = np.clip(orig, 0, 255).astype(np.uint8)
+    params = load_filtered_overlay_params()
+    pipeline = ContourPipeline()
+    result = pipeline.run(orig, params, return_edges=False, return_binary=True)
+    all_contours = result["contours"]
+    # Use gap-closed binary (same edges that form contours) - raw edges have gaps
+    binary = result.get("binary")
     if apply_hsv_filter:
         all_contours = filter_hsv_contours(all_contours, orig)
-    return all_contours
+    return all_contours, binary
 
 
 def _kmeans_simple(pixels: np.ndarray, n_clusters: int, max_iter: int = 50):
@@ -161,7 +136,7 @@ def process_image(input_path: Path, output_dir: Path, apply_hsv_filter: bool = T
             original_img = original_img[:, :, :3]
         orig_h, orig_w = original_img.shape[:2]
 
-        contours = get_filtered_contours(
+        contours, edges = get_filtered_contours_and_edges(
             original_img, stem=input_path.stem, apply_hsv_filter=apply_hsv_filter
         )
         if not contours:
@@ -170,6 +145,17 @@ def process_image(input_path: Path, output_dir: Path, apply_hsv_filter: bool = T
 
         img_out_dir = output_dir / input_path.stem
         img_out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Edges overlay (gap-closed binary - edges that form contours, so they connect)
+        if edges is not None:
+            bin_edges = (edges > 0) if edges.dtype == bool else (edges > 127)
+            if bin_edges.shape[:2] != (orig_h, orig_w):
+                bin_edges = cv2.resize(
+                    bin_edges.astype(np.uint8), (orig_w, orig_h), interpolation=cv2.INTER_NEAREST
+                ) > 0
+            edges_overlay = original_img.copy()
+            edges_overlay[bin_edges] = [0, 255, 255]
+            Image.fromarray(edges_overlay).save(img_out_dir / "edges_overlay.png")
 
         # Contour overlay
         overlay = original_img.copy()

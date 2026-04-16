@@ -157,11 +157,34 @@ def _compute_edges_by_method(work: np.ndarray, preprocessed: np.ndarray, params:
     edge_threshold = params.get("edge_threshold", 50)  # For non-Canny methods
 
     min_area = params.get("min_area", 0)
+
+    # Combine two Canny runs: one with canny_low low (sensitive), one with canny_low high (conservative)
+    combine_canny_low = params.get("combine_canny_low_range", False)
+    cl_low = int(params.get("canny_low_low", 0))
+    cl_high = int(params.get("canny_low_high", 100))
+
+    def _canny_h_edges(canny_low_val: int):
+        ec, _, _ = compute_filtered_canny(preprocessed, blur, canny_low_val, ch, min_area=min_area)
+        eh = compute_h_channel_edges(work, blur_sigma=blur, canny_low=canny_low_val, canny_high=ch)
+        return np.maximum(ec.astype(np.float32), eh.astype(np.float32))
+
+    def _canny_only_edges(canny_low_val: int):
+        e, _, _ = compute_filtered_canny(preprocessed, blur, canny_low_val, ch, min_area=min_area)
+        return e.astype(np.float32)
+
     if method == "canny_h":
+        if combine_canny_low:
+            edges1 = _canny_h_edges(cl_low)
+            edges2 = _canny_h_edges(cl_high)
+            return np.clip(np.maximum(edges1, edges2), 0, 255).astype(np.uint8)
         edges_canny, _, _ = compute_filtered_canny(preprocessed, blur, cl, ch, min_area=min_area)
         edges_h = compute_h_channel_edges(work, blur_sigma=blur, canny_low=cl, canny_high=ch)
         return np.maximum(edges_canny.astype(np.float32), edges_h.astype(np.float32)).astype(np.uint8)
     elif method == "canny_only":
+        if combine_canny_low:
+            edges1 = _canny_only_edges(cl_low)
+            edges2 = _canny_only_edges(cl_high)
+            return np.clip(np.maximum(edges1, edges2), 0, 255).astype(np.uint8)
         edges, _, _ = compute_filtered_canny(preprocessed, blur, cl, ch, min_area=min_area)
         return edges
 

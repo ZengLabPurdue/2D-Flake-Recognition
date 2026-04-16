@@ -100,7 +100,7 @@ def compute_h_channel_edges(img: np.ndarray, blur_sigma: float = 0.6, canny_low:
     img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
     hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
     h_channel = hsv[:, :, 0]
-    blurred = cv2.GaussianBlur(h_channel, (0, 0), blur_sigma)
+    blurred = cv2.GaussianBlur(h_channel, (0, 0), max(0.01, blur_sigma))
     return cv2.Canny(blurred, canny_low, canny_high)
 
 

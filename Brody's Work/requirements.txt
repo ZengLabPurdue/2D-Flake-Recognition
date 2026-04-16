@@ -1,3 +1,10 @@
 numpy>=1.20.0
 opencv-python>=4.5.0
 Pillow>=9.0.0
+matplotlib>=3.5.0
+
+# SAM (label_training_images.py / sam_annotator_ui.py): Homebrew Python blocks global pip.
+# One-shot setup — from "Brody's Work":
+#   python3 -m venv .venv
+#   .venv/bin/pip install -U pip torch torchvision "git+https://github.com/facebookresearch/segment-anything.git"
+# Then run: ./run_label_training_images.sh   or   ./run_sam_annotator.sh

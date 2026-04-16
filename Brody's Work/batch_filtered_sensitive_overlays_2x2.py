@@ -24,9 +24,13 @@ from pipeline import ContourPipeline
 BATCH_FILTERED_SETTINGS_PATH = Path(__file__).resolve().parent / "batch_filtered_settings.json"
 _DEFAULT_PARAMS = {
     "blur_sigma": 0.6,
+    "combine_canny_low_range": False,
+    "canny_low_low": 0,
+    "canny_low_high": 100,
     "canny_low": 10,
     "canny_high": 50,
     "min_area": 0,
+    "filter_nested_contours": False,
     "edge_method": "canny_h",
     "edge_methods": ["canny_h"],
     "use_h_channel": True,
@@ -38,6 +42,12 @@ _DEFAULT_PARAMS = {
     "morph_margin": 15,
     "corner_radius": 2,
     "min_area_contour": 200,
+    "filter_yellow": False,
+    "filter_blue": False,
+    "filter_good_flake": False,
+    "yellow_v_min": 70,
+    "blue_h_min": 100,
+    "good_flake_g_max": 130,
 }
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
 
@@ -78,9 +88,10 @@ def process_one(input_path: Path, output_dir: Path, params: dict) -> bool:
             original_img = original_img[:, :, :3]
 
         pipeline = ContourPipeline()
-        result = pipeline.run(original_img, params, return_edges=False, return_binary=False)
+        result = pipeline.run(original_img, params, return_edges=True, return_binary=False)
         filtered_contours = result["contours"]
         overlay = result["overlay"]
+        edges = result.get("edges")
         orig_h, orig_w = original_img.shape[:2]
 
         # Contours-only canvas (flake_extraction reads this)
@@ -94,6 +105,12 @@ def process_one(input_path: Path, output_dir: Path, params: dict) -> bool:
         contours_path = output_dir / f"{stem}_binned_filtered_contours.png"
         Image.fromarray(overlay).save(overlay_path)
         Image.fromarray(contours_canvas).save(contours_path)
+        if edges is not None:
+            if edges.ndim == 3:
+                edges_gray = edges[:, :, 0]
+            else:
+                edges_gray = edges
+            Image.fromarray(edges_gray).save(output_dir / f"{stem}_binned_filtered_edges.png")
 
         print(f"  ✓ {input_path.name} -> {len(filtered_contours)} contours")
         return True
