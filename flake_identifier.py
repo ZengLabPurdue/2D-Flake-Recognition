@@ -113,7 +113,7 @@ class Flake_Identifier():
             class_to_color = {
                 0: (200, 200, 200),  # Background - light gray
                 1: (220, 180, 120),  # Glue - light brown/orange
-                2: (0, 255, 0),    # Thin flake - green
+                2: (0, 255, 0),      # Thin flake - green
                 3: (0, 255, 200),    # Medium flake - teal
                 4: (255, 255, 0),    # Thick flake - yellow
             }

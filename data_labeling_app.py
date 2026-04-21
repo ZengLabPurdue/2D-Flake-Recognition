@@ -90,7 +90,7 @@ class DataLabelingApp:
         style.configure("Normal.TButton", relief="flat")
         style.configure("Normal.TButton", padding=(20, 10))
 
-        labels = ["Thick Flake", "Med Flake", "Thin Flake", "Mixed Flake", "Glue", "Dust"]
+        labels = ["Good Flake", "Bad Flake", "Unclear Flake", "No Flake"]
 
         self.buttons = {}
 
@@ -190,7 +190,7 @@ class DataLabelingApp:
         style.configure("Arrow.TButton", relief="flat")
 
         self.contour_button_panel = tk.Frame(self.left_panel, bg="white", width=80, height=45)
-        self.contour_button_panel.place(relx=0.5, x=0, y=565, anchor="n")
+        self.contour_button_panel.place(relx=0.5, x=0, y=510, anchor="n")
         self.contour_button_panel.pack_propagate(False)
 
         image_controls = tk.Frame(self.contour_button_panel, bg="white")

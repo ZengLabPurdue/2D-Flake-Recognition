@@ -117,7 +117,7 @@ class App:
 
         self.panels.append({
             "name": "Info Panel",
-            "frame": self.init_info_panel(),
+            "frame": self.init_scan_info_panel(),
             "var": BooleanVar(value=False)
         })
 
@@ -221,26 +221,26 @@ class App:
 
     # Panel Initialization 
 
-    def init_info_panel(self):
+    def init_scan_info_panel(self):
 
-        self.info_panel = Frame(
+        self.scan_info_panel = Frame(
             self.main_frame,
             bg="#f0f0f0",
             width=204,
-            height=114
+            height=147
         )
-        self.info_panel.place(relx=1.0, rely=0.0, anchor="ne")
+        self.scan_info_panel.place(relx=1.0, rely=0.0, anchor="ne")
 
         self.info_background = Frame(
-            self.info_panel,
+            self.scan_info_panel,
             bg="white",
             width=200,
-            height=112
+            height=145
         )
         self.info_background.place(x=2, y=0)
 
         title_label = Label(
-            self.info_panel,
+            self.scan_info_panel,
             text="Info",
             bg="white",
             fg="black",
@@ -248,33 +248,47 @@ class App:
         )
         title_label.place(relx=0.5, y=10, anchor="n")
 
-        self.info_magnification_label = Label(
-            self.info_panel,
-            text=f"Magnification: {MAGNIFICATION}x",
+        self.scan_info_type_label = Label(
+            self.scan_info_panel,
+            text=f"Scan: None",
             bg="white",
             fg="black"
         )
-        self.info_magnification_label.place(relx=0.5, y=35, anchor="n")
+        self.scan_info_type_label.place(relx=0.5, y=35, anchor="n")
 
+        self.scan_info_stage_label = Label(
+            self.scan_info_panel,
+            text="Stage: Not Started",
+            bg="white",
+            fg="black"
+        )
+        self.scan_info_stage_label.place(relx=0.5, y=55, anchor="n")
 
-        self.info_progress_label = Label(
-            self.info_panel,
+        self.scan_info_progress_label = Label(
+            self.scan_info_panel,
             text="Progress: Not Started",
             bg="white",
             fg="black"
         )
-        self.info_progress_label.place(relx=0.5, y=55, anchor="n")
+        self.scan_info_progress_label.place(relx=0.5, y=75, anchor="n")
 
-
-        self.info_time_label = Label(
-            self.info_panel,
-            text="Time Elapsed: Not Started",
+        self.scan_info_stage_time_label = Label(
+            self.scan_info_panel,
+            text="Stage Time Elapsed: Not Started",
             bg="white",
             fg="black"
         )
-        self.info_time_label.place(relx=0.5, y=75, anchor="n")
+        self.scan_info_stage_time_label.place(relx=0.5, y=95, anchor="n")
 
-        return self.info_panel
+        self.scan_info_total_time_label = Label(
+            self.scan_info_panel,
+            text="Total Time Elapsed: Not Started",
+            bg="white",
+            fg="black"
+        )
+        self.scan_info_total_time_label.place(relx=0.5, y=115, anchor="n")
+
+        return self.scan_info_panel
 
     def init_stage_control_panel(self):
 
@@ -1267,11 +1281,15 @@ class App:
 
     def run_complete_scan(self, window=(3, 3)):
 
+        self.open_panel("Info Panel")
+
         start_time = time.time()
 
         scan_path = home_dir / "Scans" / datetime.now().strftime("Full Scan (%Y-%m-%d) (%H-%M-%S)")
 
-        center_x, center_y, scale_2x = self.run_2x_scan(scan_path=scan_path, window=window)
+        self.update_scan_status(scan_type="Full Scan")
+
+        center_x, center_y, scale_2x = self.run_2x_scan(scan_path=scan_path, full_scan=True, full_scan_start_time=start_time, window=window)
         chips = self.find_chips(self.filter_map)
         scan_coordinates = self.generate_10x_scan_coordinates(chips, center_x, center_y, scale_2x)
 
@@ -1285,7 +1303,7 @@ class App:
 
         flake_detection_thread.start()
 
-        self.run_10x_scan(scan_coordinates, scan_path=scan_path, image_queue=image_queue)
+        self.run_10x_scan(scan_coordinates, scan_path=scan_path, full_scan=True, full_scan_start_time=start_time, image_queue=image_queue)
         image_queue.put(None)
 
         flake_detection_thread.join()
@@ -1296,7 +1314,9 @@ class App:
         self.go_to_position(x = 0,  y = 0)
         self.change_objective(1)
 
-    def run_2x_scan(self, window=(3, 3), scan_path=None, zoom=6, full_scan=False, full_zoom=False):
+    def run_2x_scan(self, window=(3, 3), scan_path=None, zoom=6, full_scan=False, full_scan_start_time = None, full_zoom=False):
+
+        self.open_panel("Info Panel")
 
         print("2x scan running...")
 
@@ -1306,7 +1326,7 @@ class App:
 
         start_time = time.time()
         if scan_path is None:
-            path = home_dir / "Scans" / "2x" / datetime.now().strftime("2x (%Y-%m-%d) (%H-%M-%S)")
+            path = home_dir / "Scans" / datetime.now().strftime("2x (%Y-%m-%d) (%H-%M-%S)")
         else:
             path = scan_path / "All Images" / "2x"
 
@@ -1326,6 +1346,11 @@ class App:
         
         if full_zoom:
             zoom = max(int(self.hcam.get_Size()[1] / (self.true_map.shape[0] / window[1])), int(self.hcam.get_Size()[0] / (self.true_map.shape[1] / window[0])))
+
+        if full_scan:
+            self.update_scan_status(stage="2x Scan", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
+        else:
+            self.update_scan_status(scan_type="2x Scan", stage="2x Scan", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
 
         i = 1
         for offset_x, offset_y in coords:
@@ -1368,12 +1393,18 @@ class App:
             self.true_map[y_start:y_end, x_start:x_end] = img_small[:y_end - y_start, :x_end - x_start]
             self.filter_map[y_start:y_end, x_start:x_end] = img_binary_small[:y_end - y_start, :x_end - x_start]
 
-            elapsed = time.time() - start_time
-            elapsed_str = time.strftime("%H:%M:%S", time.gmtime(elapsed))
-            progress_percent = f"{(i+1)}/{total_frames} ({(i+1)*100//total_frames}%)"
+            stage_elapsed = time.time() - start_time
+            if full_scan_start_time is not None:
+                total_elapsed = time.time() - full_scan_start_time
+                total_elapsed_str = time.strftime("%H:%M:%S", time.gmtime(total_elapsed))
+            stage_elapsed_str = time.strftime("%H:%M:%S", time.gmtime(stage_elapsed))
+            progress_percent = f"{(i)}/{total_frames} ({(i)*100//total_frames}%)"
             i = i + 1
     
-            self.update_scan_status(progress=progress_percent, elapsed_time=elapsed_str)
+            if full_scan:
+                self.update_scan_status(progress=progress_percent, stage_elapsed_time=stage_elapsed_str, total_elapsed_time=total_elapsed_str)
+            else:
+                self.update_scan_status(progress=progress_percent, stage_elapsed_time=stage_elapsed_str, total_elapsed_time=stage_elapsed_str)
 
         self.scan_running = False
         pc.go_to_pos(center_x, center_y)
@@ -1382,7 +1413,9 @@ class App:
 
         return center_x, center_y, zoom
 
-    def run_10x_scan(self, scan_coordinates_10x=None, scan_path=None, image_queue=None, zoom=4, full_scan=False):
+    def run_10x_scan(self, scan_coordinates_10x=None, scan_path=None, image_queue=None, zoom=4, full_scan=False, full_scan_start_time=None):
+
+        self.open_panel("Info Panel")
 
         start_time = time.time()
 
@@ -1391,7 +1424,7 @@ class App:
         self.change_objective(2)
 
         if scan_path is None:
-            path = home_dir / "Scans" / "10x" / datetime.now().strftime("10x (%Y-%m-%d) (%H-%M-%S)")
+            path = home_dir / "Scans" / datetime.now().strftime("10x (%Y-%m-%d) (%H-%M-%S)")
         else:
             path = scan_path / "All Images" / "10x"
 
@@ -1408,12 +1441,17 @@ class App:
             self.true_map = np.zeros((3000, 3000, 3), dtype=np.uint8)
             self.scan_running = True
 
+            if full_scan:
+                self.update_scan_status(stage=f"10x Scan - Chip {i} / {len(scan_coordinates_10x)}", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
+            else:
+                self.update_scan_status(scan_type="10x Scan", stage="10x Scan", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
+
             global x_pos, y_pos
 
             center_x = coordinates[0]
             center_y = coordinates[1]
 
-            coords, _ = self.generate_rect_coords(coordinates[2], coordinates[3])
+            coords, total_frames = self.generate_rect_coords(coordinates[2], coordinates[3])
 
             pc.go_to_pos(center_x, center_y)
 
@@ -1460,6 +1498,18 @@ class App:
                 self.true_map[y_start:y_end, x_start:x_end] = img_small[:y_end - y_start, :x_end - x_start]
 
                 self.display_map()
+
+                stage_elapsed = time.time() - chip_time
+                if full_scan_start_time is not None:
+                    total_elapsed = time.time() - full_scan_start_time
+                    total_elapsed_str = time.strftime("%H:%M:%S", time.gmtime(total_elapsed))
+                stage_elapsed_str = time.strftime("%H:%M:%S", time.gmtime(stage_elapsed))
+                progress_percent = f"{(j)}/{total_frames} ({(j)*100//total_frames}%)"
+    
+                if full_scan:
+                    self.update_scan_status(progress=progress_percent, stage_elapsed_time=stage_elapsed_str, total_elapsed_time=total_elapsed_str)
+                else:
+                    self.update_scan_status(progress=progress_percent, stage_elapsed_time=stage_elapsed_str, total_elapsed_time=stage_elapsed_str)
 
             print("Chip {} imaging finished!".format(i))
             print("Time taken: {:.2f}s".format(time.time() - chip_time))
@@ -1508,7 +1558,7 @@ class App:
             start_x = max(0, chip_center_x - grid_w // 2)
             start_y = max(0, chip_center_y - grid_h // 2)
 
-            start_pos_x = - (chip_center_x - self.true_map.shape[1] / 2) * (X_SIZE_2 * CENTER_CROP_WIDTH_RATIO_2X) / (self.hcam.get_Size()[0] / scale * CENTER_CROP_WIDTH_RATIO_2X) + scan_center_x
+            start_pos_x = (chip_center_x - self.true_map.shape[1] / 2) * (X_SIZE_2 * CENTER_CROP_WIDTH_RATIO_2X) / (self.hcam.get_Size()[0] / scale * CENTER_CROP_WIDTH_RATIO_2X) + scan_center_x
             start_pos_y = - (chip_center_y - self.true_map.shape[0] / 2) * (Y_SIZE_2 * CENTER_CROP_WIDTH_RATIO_2X) / (self.hcam.get_Size()[1] / scale * CENTER_CROP_WIDTH_RATIO_2X) + scan_center_y
             scan_coordinates_10x.append([round(start_pos_x), round(start_pos_y), num_windows_x, num_windows_y])
 
@@ -1572,18 +1622,24 @@ class App:
 
         return spiral_coords, total_frames
 
-    def update_scan_status(self, progress=None, elapsed_time=None, magnification=None):
-        if magnification is not None:
-            self.info_magnification_label.config(text=f"Magnification: {magnification}x")
+    def update_scan_status(self, scan_type=None, stage=None, progress=None, stage_elapsed_time=None, total_elapsed_time=None):
+        if scan_type is not None:
+            self.scan_info_type_label.config(text=f"Scan: {scan_type}")
+    
+        if stage is not None:
+            self.scan_info_stage_label.config(text=f"Stage: {stage}")
 
         if progress is not None:
-            self.info_progress_label.config(text=f"Progress: {progress}")
+            self.scan_info_progress_label.config(text=f"Stage Progress: {progress}")
 
-        if elapsed_time is not None:
-            self.info_time_label.config(text=f"Time Elapsed: {elapsed_time}")
+        if stage_elapsed_time is not None:
+            self.scan_info_stage_time_label.config(text=f"Stage Time Elapsed: {stage_elapsed_time}")
+
+        if total_elapsed_time is not None:
+            self.scan_info_total_time_label.config(text=f"Total Time Elapsed: {total_elapsed_time}")
 
         self.display_map()
-        self.info_panel.update()
+        self.scan_info_panel.update()
 
     # ------------- Flake Detection -------------
 
@@ -1797,6 +1853,13 @@ class App:
                 frame.update_idletasks()
 
                 y_position += frame.winfo_height()
+
+    def open_panel(self, name):
+        for panel in self.panels:
+            if panel["name"] == name:
+                panel["var"].set(True)
+                self.update_panels()
+                return
 
     def enable_buttons(self):
         for btn in self.buttons:
