@@ -21,14 +21,14 @@ import cv2
 import csv
 
 home_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-flake_finder_dir = home_dir / "Flake Recognition"
-sys.path.insert(0, str(flake_finder_dir))
+contour_finder_dir = home_dir / "Flake Recognition"
+sys.path.insert(0, str(contour_finder_dir))
 
-import flake_finder
+import contour_finder
 
 CROP_SCALE = 1.2
 
-class DataLabelingApp:
+class FlakeLabelingApp:
     def __init__(self, root):
 
         self.root = root
@@ -190,7 +190,7 @@ class DataLabelingApp:
         style.configure("Arrow.TButton", relief="flat")
 
         self.contour_button_panel = tk.Frame(self.left_panel, bg="white", width=80, height=45)
-        self.contour_button_panel.place(relx=0.5, x=0, y=510, anchor="n")
+        self.contour_button_panel.place(relx=0.5, x=0, y=450, anchor="n")
         self.contour_button_panel.pack_propagate(False)
 
         image_controls = tk.Frame(self.contour_button_panel, bg="white")
@@ -320,7 +320,7 @@ class DataLabelingApp:
     def find_contours(self, img):
         img_bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
 
-        self.masked_background, self.contours = flake_finder.find_flakes(img_bgr, display=False)
+        self.masked_background, self.contours = contour_finder.find_flakes(img_bgr, display=False)
 
         self.len_contours = len(self.contours)
         self.contour_count_var.set(f"Contours Found: {self.len_contours}")
@@ -440,5 +440,5 @@ class DataLabelingApp:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = DataLabelingApp(root)
+    app = FlakeLabelingApp(root)
     root.mainloop()

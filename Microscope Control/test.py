@@ -25,7 +25,7 @@ parent_dir = home_dir.parent
 flake_reg_path = parent_dir / "Flake Recognition"
 sys.path.insert(0, str(flake_reg_path))
 
-import flake_finder
+import contour_finder
 
 folder_path = filedialog.askdirectory()
 
@@ -46,6 +46,6 @@ num_contours = 0
 
 for file_path in file_list:
     image_bgr = cv2.imread(file_path)
-    num_contours += len(flake_finder.find_flakes(image_bgr, display=False)[1])
+    num_contours += len(contour_finder.find_flakes(image_bgr, display=False)[1])
 
 print(f"Total number of contours found: {num_contours}")

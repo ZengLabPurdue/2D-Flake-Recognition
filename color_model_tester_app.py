@@ -5,6 +5,12 @@ from PIL import Image, ImageTk
 import numpy as np
 import math
 
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
+import tensorflow as tf
+tf.get_logger().setLevel('ERROR')
 from tensorflow.keras.models import load_model
 from tkinter import messagebox
 
@@ -174,10 +180,8 @@ class ModelTesterApp:
             self.canvas.delete(self.avg_rect)
 
         if picker == "r":
-            self.root.title("Model Tester App - Average Color picker")
             self.color_display_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         if picker == "p":
-            self.root.title("Model Tester App - Picker picker")
             self.color_display_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
     def set_color_display(self, r, g, b, target):

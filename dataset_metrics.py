@@ -11,10 +11,12 @@ if not folder_path:
 
 valid_ext = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
 
-file_list = [
-    f for f in os.listdir(folder_path)
-    if os.path.splitext(f)[1].lower() in valid_ext
-]
+file_list = []
+
+for root, dirs, files in os.walk(folder_path):
+    for f in files:
+        if os.path.splitext(f)[1].lower() in valid_ext:
+            file_list.append(os.path.join(root, f))
 
 if not file_list:
     print("No valid image files found.")
@@ -22,11 +24,11 @@ if not file_list:
 
 labels = []
 
-for filename in file_list:
+for filepath in file_list:
+    filename = os.path.basename(filepath)
     name = os.path.splitext(filename)[0]
 
     parts = name.split("_")
-
     label = parts[0].lower() if len(parts) > 1 else "unknown"
 
     labels.append(label)

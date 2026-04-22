@@ -29,7 +29,7 @@ model_path = Path(home_dir) / "color_classifier_tf.keras"
 sys.path.insert(0, str(flake_reg_path))
 
 #import single_frame_pipeline
-import flake_finder
+import contour_finder
 
 class Flake_Identifier():
     def __init__(self):
@@ -44,7 +44,7 @@ class Flake_Identifier():
     # image should be in RGB
     def identify_flakes(self, image, output=False):
         start_time = time.time()
-        masked_image, contours = flake_finder.find_flakes(image, display=False)
+        masked_image, contours = contour_finder.find_flakes(image, display=False)
 
         valid_contours = []
         for c in contours:
@@ -145,7 +145,7 @@ class Flake_Identifier():
     
     def find_flakes(self, image, output=False):
 
-        _, contours = flake_finder.find_flakes(image, display=False)
+        _, contours = contour_finder.find_flakes(image, display=False)
 
         return contours
 

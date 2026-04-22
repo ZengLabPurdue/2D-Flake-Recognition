@@ -2018,7 +2018,7 @@ class App:
 
         self.hcam = amcam.Amcam.Open(cams[0].id)
 
-        self.hcam.put_eSize(1)
+        self.hcam.put_eSize(0)
 
         self.hcam.put_AutoExpoEnable(True)
         self.hcam.put_AutoExpoTarget(DEFAULT_EXPOSURE)
@@ -2044,15 +2044,13 @@ class App:
 
         self.start_camera_frame_timer = 0
 
-        '''
         num_res = self.hcam.ResolutionNumber()
         for i in range(num_res):
             print(f"Resolution {i}: {self.hcam.get_Resolution(i)}")
 
         width, height = self.hcam.get_Size()
         print(f"Current Resolution: ({width}, {height})")
-        '''
-
+        
         max_speed = self.hcam.MaxSpeed()
         self.hcam.put_Speed(max_speed)
 
