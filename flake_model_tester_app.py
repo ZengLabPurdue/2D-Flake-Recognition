@@ -12,6 +12,7 @@ import tkinter as tk
 from tkinter import filedialog
 
 import tensorflow as tf
+print("GPUs:", tf.config.list_physical_devices('GPU'))
 from tensorflow.keras.models import load_model
 tf.get_logger().setLevel('ERROR')
 
@@ -56,8 +57,15 @@ if image is None:
 
 image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-
 start_time = time.time()
+
+intensities = []
+red_values = []
+green_values = []
+blue_values = []
+red_green_values = []
+
+labels = []
 
 masked_image, contours = contour_finder.find_flakes(image, display=False)
 
@@ -107,15 +115,34 @@ for c in valid_contours:
     contour_mask = np.zeros(image.shape[:2], dtype=np.uint8)
     cv2.drawContours(contour_mask, [c], -1, 255, -1)
 
-    mask_crop = contour_mask[new_y:new_y2, new_x:new_x2]
-    img_crop = image[new_y:new_y2, new_x:new_x2]
-
-    if img_crop.size == 0:
-        continue
-
     crop = image[new_y:new_y2, new_x:new_x2]
 
+    h_crop, w_crop = crop.shape[:2]
+
     if crop.size == 0:
+        continue
+
+    c_local = c.copy()
+    c_local[:, 0, 0] -= new_x
+    c_local[:, 0, 1] -= new_y
+
+    mask = np.zeros((h_crop, w_crop), dtype=np.uint8)
+    cv2.drawContours(mask, [c_local], -1, 255, -1)
+
+    gray_crop = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+
+    masked_pixels = gray_crop[mask == 255]
+
+    if len(masked_pixels) == 0:
+        continue
+
+    avg_intensity = float(masked_pixels.mean())
+    avg_red = float(crop[:, :, 0][mask == 255].mean())
+    avg_green = float(crop[:, :, 1][mask == 255].mean())
+    avg_blue = float(crop[:, :, 2][mask == 255].mean())
+    avg_red_green = (avg_red + avg_green) / 2
+
+    if (avg_red_green > 150):
         continue
 
     crop = cv2.resize(crop, (flake_classifier.IMG_SIZE, flake_classifier.IMG_SIZE))
@@ -136,6 +163,12 @@ for c in valid_contours:
 
     flakes.append((class_id, (new_x, new_y, new_w, new_h)))
 
+    intensities.append(avg_intensity)
+    red_values.append(avg_red)
+    green_values.append(avg_green)
+    blue_values.append(avg_blue)
+    red_green_values.append(avg_red_green)
+    labels.append(class_id)
 
 print(f"Time: {time.time() - start_time:.2f}s")
 
@@ -144,3 +177,22 @@ plt.imshow(scanned_image)
 plt.title("Flake Detection + Classification")
 plt.axis("off")
 plt.show()
+
+plt.figure(figsize=(8, 5))
+
+names = ["Intensity", "Red Values", "Green Values", "Blue Values", "Red + Green Values"]
+
+for data, name in zip([intensities, red_values, green_values, blue_values, red_green_values], names):
+    for i in range(len(data)):
+        class_id = labels[i]
+        intensity = data[i]
+
+        color = np.array(class_to_color[class_id]) / 255.0
+
+        plt.scatter(i, intensity, color=color)
+
+    plt.xlabel("Flake Index")
+    plt.ylabel(f"Average {name}")
+    plt.title(f"Flake {name} by Predicted Class")
+
+    plt.show()

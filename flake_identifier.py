@@ -24,17 +24,20 @@ os.environ["YOLO_VERBOSE"] = "False"
 home_dir = os.path.dirname(os.path.abspath(__file__))
 #brody_work_path = Path(home_dir) / "Brody's Work"
 flake_reg_path = Path(home_dir) / "Flake Recognition"
-model_path = Path(home_dir) / "color_classifier_tf.keras"
+color_model_path = Path(home_dir) / "color_classifier_tf.keras"
+flake_model_path = Path(home_dir) / "flake_classifier_tf.keras"
 #sys.path.insert(0, str(brody_work_path))
 sys.path.insert(0, str(flake_reg_path))
 
 #import single_frame_pipeline
 import contour_finder
+import flake_classifier
 
 class Flake_Identifier():
     def __init__(self):
         try:
-            self.model = load_model(model_path)
+            #self.model = load_model(color_model_path)
+            self.model = load_model(flake_model_path)
         except Exception as e:
             self.model = None
             print(f"Error loading model: {e}")
@@ -42,7 +45,7 @@ class Flake_Identifier():
         print("Flake identifier initialized!")
 
     # image should be in RGB
-    def identify_flakes(self, image, output=False):
+    def identify_flakes_color_model(self, image, output=False):
         start_time = time.time()
         masked_image, contours = contour_finder.find_flakes(image, display=False)
 
@@ -143,20 +146,106 @@ class Flake_Identifier():
         
         return scanned_image, flakes, save
     
+    def identify_flakes_flake_model(self, image, output=False):
+        start_time = time.time()
+
+        save = False
+
+        contours = self.find_flakes(image, output=False)
+        
+        valid_contours = []
+        for c in contours:
+            try:
+                c_fixed = np.array(c, dtype=np.int32).reshape(-1, 1, 2)
+                valid_contours.append(c_fixed)
+            except:
+                continue
+            
+        scanned_image = image.copy()
+        
+        flakes = []
+        
+        class_to_color = {
+            0: (255, 255, 0),    # Bad flake - yellow
+            1: (0, 255, 0),      # Good flake - green
+            2: (200, 200, 200),  # Not a flake - light gray
+            3: (0, 255, 200),    # Unclear flake - teal
+        }
+        
+        for c in valid_contours:
+        
+            x, y, w, h = cv2.boundingRect(c)
+        
+            cx, cy = x + w / 2, y + h / 2
+        
+            scale = 1.2
+            new_w, new_h = w * scale, h * scale
+        
+            new_x = int(cx - new_w / 2)
+            new_y = int(cy - new_h / 2)
+            new_x2 = int(cx + new_w / 2)
+            new_y2 = int(cy + new_h / 2)
+        
+            h_img, w_img = image.shape[:2]
+        
+            new_x = max(0, new_x)
+            new_y = max(0, new_y)
+            new_x2 = min(w_img, new_x2)
+            new_y2 = min(h_img, new_y2)
+        
+            if new_x2 <= new_x or new_y2 <= new_y:
+                continue
+            
+            contour_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+            cv2.drawContours(contour_mask, [c], -1, 255, -1)
+            
+            crop = image[new_y:new_y2, new_x:new_x2]
+        
+            if crop.size == 0:
+                continue
+            
+            crop = cv2.resize(crop, (flake_classifier.IMG_SIZE, flake_classifier.IMG_SIZE))
+            crop = crop.astype(np.float32) / 255.0
+        
+            input_img = np.expand_dims(crop, axis=0)
+        
+            pred = self.model.predict(input_img, verbose=0)
+            class_id = int(np.argmax(pred))
+        
+            color = class_to_color.get(class_id, (255, 255, 255))
+        
+            if class_id == 1:
+                save = True
+
+            cv2.rectangle(scanned_image,
+                          (new_x, new_y),
+                          (new_x2, new_y2),
+                          color,
+                          2)
+        
+            flakes.append((class_id, (new_x, new_y, new_w, new_h)))
+        
+        if output:
+            print(f"Time: {time.time() - start_time:.2f}s")
+
+            plt.figure(figsize=(10, 8))
+            plt.imshow(scanned_image)
+            plt.title("Flake Detection + Classification")
+            plt.axis("off")
+            plt.show()
+
+        return scanned_image, flakes, save
+
     def find_flakes(self, image, output=False):
 
-        _, contours = contour_finder.find_flakes(image, display=False)
+        _, contours = contour_finder.find_flakes(image, display=output)
 
         return contours
 
-'''
-image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
-image_bgr = cv2.imread(image_path, cv2.IMREAD_COLOR)
-image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+if __name__ == "__main__":
+    image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
+    image_bgr = cv2.imread(image_path, cv2.IMREAD_COLOR)
+    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
 
-flake_id = Flake_Identifier()
-print(flake_id.identify_flakes_seg_model(image_rgb))
-
-flake_id.identify_flakes(image_rgb, output=True)
-'''
-
+    flake_id = Flake_Identifier()
+    flake_id.identify_flakes_flake_model(image_rgb, output=True)
