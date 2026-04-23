@@ -505,10 +505,10 @@ class DataLabelingApp2:
                      troughcolor=T_SURFACE, highlightthickness=0, showvalue=False,
                      command=_cmd).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        self.yellow_hue_lo_var  = tk.IntVar(value=20)
-        self.yellow_hue_hi_var  = tk.IntVar(value=35)
-        self.yellow_sat_min_var = tk.IntVar(value=100)
-        self.yellow_val_min_var = tk.IntVar(value=100)
+        self.yellow_hue_lo_var  = tk.IntVar(value=18)
+        self.yellow_hue_hi_var  = tk.IntVar(value=90)
+        self.yellow_sat_min_var = tk.IntVar(value=40)
+        self.yellow_val_min_var = tk.IntVar(value=154)
         _yscale(sobel_inner, "Hue lo (0–90):",   self.yellow_hue_lo_var,  0,  90)
         _yscale(sobel_inner, "Hue hi (0–90):",   self.yellow_hue_hi_var,  0,  90)
         _yscale(sobel_inner, "Sat min (0–255):", self.yellow_sat_min_var, 0, 255)

@@ -47,14 +47,14 @@ def _filter_chip_boundary_contours(contours, img_w: int, img_h: int):
     return [c for c in contours if not _is_likely_chip_boundary_contour(c, img_w, img_h)]
 
 
-def _build_yellow_mask(image_bgr, hue_lo=20, hue_hi=35, sat_min=100, val_min=100):
+def _build_yellow_mask(image_bgr, hue_lo=18, hue_hi=90, sat_min=40, val_min=154):
     """Boolean (H,W) mask — True where pixel is in the yellow HSV band."""
     hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
     h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
     return (h >= hue_lo) & (h <= hue_hi) & (s >= sat_min) & (v >= val_min)
 
 
-def _filter_interior_yellow(contours, image_bgr, hue_lo=20, hue_hi=35, interior_pct=50):
+def _filter_interior_yellow(contours, image_bgr, hue_lo=18, hue_hi=90, interior_pct=50):
     """
     Drop contours where >= interior_pct% of interior pixels fall in the yellow hue band.
     Based on the approach in flake_extraction_pipeline.py.
@@ -84,10 +84,10 @@ def find_flakes(
     display=False,
     filter_chip_boundary=True,
     suppress_yellow=False,
-    yellow_hue_lo=20,
-    yellow_hue_hi=35,
-    yellow_sat_min=100,
-    yellow_val_min=100,
+    yellow_hue_lo=18,
+    yellow_hue_hi=90,
+    yellow_sat_min=40,
+    yellow_val_min=154,
     filter_yellow_interior=False,
     yellow_interior_pct=50,
 ):
