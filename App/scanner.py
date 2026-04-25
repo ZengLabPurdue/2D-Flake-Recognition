@@ -46,6 +46,17 @@ CENTER_CROP_HEIGHT_RATIO_2X = 0.7
 CENTER_CROP_WIDTH_RATIO_10X = 0.9
 CENTER_CROP_HEIGHT_RATIO_10X = 0.9
 
+CENTER_CROP_WIDTH_RATIO_20X = 1
+CENTER_CROP_HEIGHT_RATIO_20X = 1
+
+CENTER_CROP_WIDTH_RATIO_100X = 1
+CENTER_CROP_HEIGHT_RATIO_100X = 1
+
+RELATIVE_2X_Z = 0
+RELATIVE_10X_Z = 1000
+RELATIVE_20X_Z = 4800
+RELATIVE_100X_Z = 4800
+
 X_SIZE_2 = 10642
 Y_SIZE_2 = 7027
 
@@ -1156,31 +1167,41 @@ class App:
 
     def change_objective(self, position):
 
-        current_z = pc.get_curr_z_pos()
-        if position == 1:
-            if tc.check_position() == 2:
-                current_z -= 1000
-                pc.go_to_z_pos(current_z)
-                tc.turn_to_position(position)
-                self.auto_focus()
-            self.magnification = "2x"
-        elif position == 2:
-            if tc.check_position() == 1:
-                current_z += 1000
-                pc.go_to_z_pos(current_z)
-                tc.turn_to_position(position)
-                self.auto_focus(start_range=500, accuracy=10, steps=20)
-            self.magnification = "10x"
-        elif position == 3:
-            tc.turn_to_position(position)
-            self.magnification = None
-        elif position == 4:
-            tc.turn_to_position(position)
-            self.magnification = None
-        elif position == 5:
-            tc.turn_to_position(position)
-            self.magnification = None
+        objective_map = {
+            1: ("2x", RELATIVE_2X_Z),
+            2: ("10x", RELATIVE_10X_Z),
+            3: ("20x", RELATIVE_20X_Z),
+            4: (None, RELATIVE_20X_Z),
+            5: ("100x", RELATIVE_100X_Z),
+        }
 
+        current_position = tc.check_position()
+
+        if position == current_position:
+            return
+
+        current_z = pc.get_curr_z_pos()
+
+        _, current_rel_z = objective_map.get(current_position, (None, 0))
+        magnification, target_rel_z = objective_map.get(position, (None, 0))
+
+        change_z = target_rel_z - current_rel_z
+
+        pc.go_to_z_pos(current_z + change_z)
+        tc.turn_to_position(position)
+
+        if position == 1:
+            self.auto_focus()
+        elif position == 2:
+            self.auto_focus(start_range=500, accuracy=10, steps=20)
+        '''
+        elif position == 3:
+            self.auto_focus(start_range=200, accuracy=5, steps=20)
+        elif position == 4:
+            self.auto_focus(start_range=50, accuracy=2, steps=10)
+        '''
+            
+        self.magnification = magnification
         self.objective_var.set(f"Objective: {position}")
 
     def find_sharpness(self, image):
@@ -1289,7 +1310,7 @@ class App:
 
         self.update_scan_status(scan_type="Full Scan")
 
-        center_x, center_y, scale_2x = self.run_2x_scan(scan_path=scan_path, full_scan=True, full_scan_start_time=start_time, window=window)
+        center_x, center_y, scale_2x = self.run_2x_scan(scan_path=scan_path, full_scan=True, full_scan_start_time=start_time, window=window, full_zoom=True)
         chips = self.find_chips(self.filter_map)
         scan_coordinates = self.generate_10x_scan_coordinates(chips, center_x, center_y, scale_2x)
 
@@ -1650,7 +1671,7 @@ class App:
                 break
             img = cv2.imread(str(img_path))
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            scanned_img, _, save = fi.identify_flakes(img)
+            scanned_img, _, save = fi.identify_flakes_flake_model(img)
             out_path = img_path.parent.parent / "Processed" / img_path.name
             self.save_image(cv2.cvtColor(scanned_img, cv2.COLOR_RGB2BGR), save_dir=out_path.parent, filename=out_path.name)
             if save:
@@ -1798,6 +1819,15 @@ class App:
             elif self.magnification == "10x":
                 crop_w = int(w * CENTER_CROP_WIDTH_RATIO_10X)
                 crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_10X)
+            elif self.magnification == "20x":
+                crop_w = int(w * CENTER_CROP_WIDTH_RATIO_20X)
+                crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_20X)
+            elif self.magnification == "100x":
+                crop_w = int(w * CENTER_CROP_WIDTH_RATIO_100X)
+                crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_100X)
+            else:
+                crop_w = w
+                crop_h = h
 
             x1 = cx - crop_w // 2
             y1 = cy - crop_h // 2
@@ -1989,13 +2019,13 @@ class App:
         #self.start_camera_frame_timer = time.time()
         try:
             self.hcam.PullImageV2(self.buf, 24, None)
-            self.frame_id += 1
 
             row_bytes = ((self.width * 24 + 31) // 32 * 4)
             img = np.frombuffer(self.buf, dtype=np.uint8).reshape(self.height, row_bytes)
             img = img[:, :self.width * 3].reshape(self.height, self.width, 3)
             img = cv2.flip(img, -1)
             self.current_frame = img.copy()
+            self.frame_id += 1
     
             if self.view_mode == "Map": return
             
@@ -2018,7 +2048,7 @@ class App:
 
         self.hcam = amcam.Amcam.Open(cams[0].id)
 
-        self.hcam.put_eSize(0)
+        self.hcam.put_eSize(1)
 
         self.hcam.put_AutoExpoEnable(True)
         self.hcam.put_AutoExpoTarget(DEFAULT_EXPOSURE)

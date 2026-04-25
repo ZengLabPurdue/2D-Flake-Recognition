@@ -21,6 +21,7 @@ def chip_filter(image, threshold=None, sample=30, display=False):
 
         hist = np.bincount(values, minlength=256)
         threshold = threshold_after_highest_peak(hist, display=display)
+        print("Threshold:", threshold)
 
     blue = image[:, :, 0] 
 
@@ -57,7 +58,7 @@ def threshold_after_highest_peak(hist, smoothing=30, min_prominence=0.05, displa
         plt.show()
 
     if len(peaks) == 1:
-        if peaks[0] < 100: return 256
+        if peaks[0] < 75: return 256
         else: return 0
     elif len(peaks) == 0: return 0
 
@@ -84,12 +85,11 @@ def threshold_after_highest_peak(hist, smoothing=30, min_prominence=0.05, displa
 
     return threshold
 
-'''
-image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
-image = cv2.imread(image_path, cv2.IMREAD_COLOR)
-gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+if __name__ == "__main__":
+    image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
+    image = cv2.imread(image_path, cv2.IMREAD_COLOR)
+    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-plt.imshow(cv2.cvtColor(chip_filter(image), cv2.COLOR_GRAY2RGB))
-plt.axis("off")
-plt.show()
-'''
+    plt.imshow(cv2.cvtColor(chip_filter(image, display=True), cv2.COLOR_GRAY2RGB))
+    plt.axis("off")
+    plt.show()

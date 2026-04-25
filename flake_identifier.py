@@ -153,6 +153,8 @@ class Flake_Identifier():
 
         contours = self.find_flakes(image, output=False)
         
+        red_green_values = []
+
         valid_contours = []
         for c in contours:
             try:
@@ -198,10 +200,31 @@ class Flake_Identifier():
             
             contour_mask = np.zeros(image.shape[:2], dtype=np.uint8)
             cv2.drawContours(contour_mask, [c], -1, 255, -1)
-            
+
             crop = image[new_y:new_y2, new_x:new_x2]
-        
+
+            h_crop, w_crop = crop.shape[:2]
+
             if crop.size == 0:
+                continue
+            
+            c_local = c.copy()
+            c_local[:, 0, 0] -= new_x
+            c_local[:, 0, 1] -= new_y
+
+            mask = np.zeros((h_crop, w_crop), dtype=np.uint8)
+            cv2.drawContours(mask, [c_local], -1, 255, -1)
+
+            gray_crop = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+
+            masked_pixels = gray_crop[mask == 255]
+
+            if len(masked_pixels) == 0:
+                continue
+            
+            avg_red_green = (float(crop[:, :, 0][mask == 255].mean()) + float(crop[:, :, 1][mask == 255].mean())) / 2
+
+            if (avg_red_green > 150):
                 continue
             
             crop = cv2.resize(crop, (flake_classifier.IMG_SIZE, flake_classifier.IMG_SIZE))
