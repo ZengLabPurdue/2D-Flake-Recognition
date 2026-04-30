@@ -23,6 +23,9 @@ DEFAULT_IMAGE_DIR = BASE / "images"
 DEFAULT_ANN_DIR = BASE / "contour_annotations"
 DEFAULT_OUT_DIR = BASE / "training_images_100x"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
+LABEL_GOOD = "good"
+LABEL_BAD = "bad"
+CLASS_IDS = {LABEL_GOOD: 0, LABEL_BAD: 1}
 
 
 @dataclass
@@ -83,12 +86,26 @@ def polygon_to_yolo_line(
     return f"{class_id} " + " ".join(coords)
 
 
+def normalize_label(value: object, *, fallback: str) -> str:
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in CLASS_IDS:
+            return lowered
+    return fallback
+
+
+def contour_points(entry: object) -> list[list[float]]:
+    if isinstance(entry, dict) and "points" in entry:
+        return entry["points"]
+    return entry
+
+
 def export_annotations(
     *,
     image_dir: Path,
     ann_dir: Path,
     out_dir: Path,
-    class_id: int,
+    default_label: str,
     decimals: int,
     copy_images: bool,
     dry_run: bool,
@@ -117,17 +134,20 @@ def export_annotations(
         with Image.open(img_path) as img:
             width, height = img.size
 
-        lines = [
-            line
-            for contour in contours
-            if (line := polygon_to_yolo_line(
-                contour,
+        lines = []
+        for contour in contours:
+            pts = contour_points(contour)
+            label = normalize_label(contour.get("label") if isinstance(contour, dict) else None, fallback=default_label)
+            cls_id = CLASS_IDS[label]
+            line = polygon_to_yolo_line(
+                pts,
                 width=width,
                 height=height,
-                class_id=class_id,
+                class_id=cls_id,
                 decimals=decimals,
-            ))
-        ]
+            )
+            if line:
+                lines.append(line)
         if not lines:
             stats.skipped_empty += 1
             continue
@@ -155,7 +175,13 @@ def main() -> int:
     parser.add_argument("--image-dir", type=Path, default=DEFAULT_IMAGE_DIR)
     parser.add_argument("--ann-dir", type=Path, default=DEFAULT_ANN_DIR)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
-    parser.add_argument("--class-id", type=int, default=0)
+    parser.add_argument(
+        "--default-label",
+        choices=sorted(CLASS_IDS.keys()),
+        default=LABEL_GOOD,
+        help="Label used for legacy contours saved without an explicit label.",
+    )
+    parser.add_argument("--class-id", type=int, default=None)
     parser.add_argument("--decimals", type=int, default=6)
     parser.add_argument("--labels-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -166,11 +192,17 @@ def main() -> int:
     if not args.ann_dir.is_dir():
         raise SystemExit(f"Annotation directory not found: {args.ann_dir}")
 
+    default_label = args.default_label
+    if args.class_id is not None:
+        inverse = {v: k for k, v in CLASS_IDS.items()}
+        default_label = inverse.get(args.class_id, LABEL_GOOD)
+        print(f"WARNING: --class-id is deprecated; mapped {args.class_id} -> default-label={default_label}")
+
     stats = export_annotations(
         image_dir=args.image_dir,
         ann_dir=args.ann_dir,
         out_dir=args.out_dir,
-        class_id=args.class_id,
+        default_label=default_label,
         decimals=args.decimals,
         copy_images=not args.labels_only,
         dry_run=args.dry_run,

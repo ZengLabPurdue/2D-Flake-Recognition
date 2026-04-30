@@ -2,6 +2,14 @@
 
 Self-contained tools for building a 100x flake mask detector with YOLO segmentation.
 
+Labels are **two-class segmentation**:
+
+- class `0` = **good**
+- class `1` = **bad**
+
+Each contour polygon carries its own label in JSON, and exports into YOLO `.txt`
+lines using those class ids.
+
 ## Folder Layout
 
 - `images/` - put 100x source images here.
@@ -18,16 +26,24 @@ Self-contained tools for building a 100x flake mask detector with YOLO segmentat
    python3 outline_tool_100x.py
    ```
 
+   Pick **Good** vs **Bad** for the contour you are about to create.
+
    Check `SAM click mode`, then left-click a flake to have SAM propose its mask.
    Right-click adds an exclude point if SAM grabs too much. You can also leave
-   SAM unchecked and draw polygons manually. When the mask looks right, use
-   `Export Training Label`.
+   SAM unchecked and draw polygons manually.
+
+   To relabel an existing contour in manual mode: click near its edge to select it,
+   choose Good/Bad, then press **Apply Label To Selected**.
+
+   When the masks look right, use `Export Training Label`.
 
 2. Export all saved JSON annotations:
 
    ```bash
    python3 export_100x_yolo_seg_labels.py
    ```
+
+   Legacy JSON files without per-contour labels default to `--default-label good`.
 
 3. Prepare a train/val split without training:
 

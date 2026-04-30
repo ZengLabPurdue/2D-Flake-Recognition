@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """
-Train a one-class YOLOv8 instance-segmentation model for 100x flake masks.
+Train a two-class YOLOv8 instance-segmentation model for 100x flake masks.
 
 Input dataset:
     training_images_100x/
 
 Each image needs a same-stem .txt YOLO segmentation label file.
+
+Classes:
+    0 good
+    1 bad
 """
 from __future__ import annotations
 
@@ -22,7 +26,7 @@ IMG_DIR = BASE / "training_images_100x"
 SPLIT_DIR = BASE / "labeled_seg_split_100x"
 PROJECT = BASE / "runs" / "segment"
 RUN_NAME = "flake_seg_100x"
-CLASSES = ["flake"]
+CLASSES = ["good", "bad"]
 SAFE_OUT = BASE / "flake_seg_100x_best.pt"
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
 

@@ -25,8 +25,13 @@ def iter_images(image_dir: Path) -> list[Path]:
     )
 
 
-def color_for_class(cls_id: int) -> tuple[int, int, int]:
-    palette = [(0, 220, 255), (60, 220, 80), (255, 120, 60), (220, 80, 220)]
+def color_for_detection(class_name: str, cls_id: int) -> tuple[int, int, int]:
+    lowered = class_name.lower()
+    if lowered == "good":
+        return (60, 210, 80)
+    if lowered == "bad":
+        return (255, 140, 60)
+    palette = [(0, 220, 255), (220, 80, 220), (255, 220, 80)]
     return palette[cls_id % len(palette)]
 
 
@@ -76,7 +81,7 @@ def save_result(
         score = float(box.conf[0])
         cls_id = int(box.cls[0])
         class_name = str(names.get(cls_id, f"class_{cls_id}"))
-        color = color_for_class(cls_id)
+        color = color_for_detection(class_name, cls_id)
 
         mask = cv2.resize(masks[idx], (w_img, h_img), interpolation=cv2.INTER_LINEAR)
         binary = (mask > 0.5).astype(np.uint8) * 255

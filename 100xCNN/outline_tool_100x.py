@@ -6,12 +6,13 @@ import json
 import shutil
 import threading
 from pathlib import Path
+from typing import Any, TypedDict
 
 import cv2
 import numpy as np
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageTk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, ttk
 
 from export_100x_yolo_seg_labels import DEFAULT_OUT_DIR, IMAGE_EXTS, polygon_to_yolo_line
 
@@ -20,10 +21,18 @@ BASE = Path(__file__).resolve().parent
 IMG_DIR = BASE / "images"
 ANN_DIR = BASE / "contour_annotations"
 MIN_POLY_POINTS = 3
+LABEL_GOOD = "good"
+LABEL_BAD = "bad"
+CLASS_IDS = {LABEL_GOOD: 0, LABEL_BAD: 1}
 SAM_CKPT_CANDIDATES = [
     BASE / "sam_vit_b_01ec64.pth",
     BASE.parent / "Brody's Work" / "sam_vit_b_01ec64.pth",
 ]
+
+
+class LabeledContour(TypedDict):
+    points: list[tuple[int, int]]
+    label: str
 
 
 def image_paths() -> list[Path]:
@@ -36,40 +45,74 @@ def ann_path(img_path: Path) -> Path:
     return ANN_DIR / f"{img_path.stem}.json"
 
 
-def load_annotations(img_path: Path) -> list[list[tuple[int, int]]]:
+def normalize_label(value: Any) -> str:
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in CLASS_IDS:
+            return lowered
+    return LABEL_GOOD
+
+
+def contour_points(contour: LabeledContour | Any) -> list[tuple[int, int]]:
+    if isinstance(contour, dict) and "points" in contour:
+        pts = contour["points"]
+        return [(int(x), int(y)) for x, y in pts]
+    return [(int(x), int(y)) for x, y in contour]
+
+
+def contour_label(contour: LabeledContour | Any) -> str:
+    if isinstance(contour, dict) and "label" in contour:
+        return normalize_label(contour["label"])
+    return LABEL_GOOD
+
+
+def load_annotations(img_path: Path) -> list[LabeledContour]:
     path = ann_path(img_path)
     if not path.exists():
         return []
     data = json.loads(path.read_text(encoding="utf-8"))
-    return [[(int(x), int(y)) for x, y in poly] for poly in data.get("contours", [])]
+    contours_out: list[LabeledContour] = []
+    for entry in data.get("contours", []):
+        if isinstance(entry, dict) and "points" in entry:
+            pts = [(int(x), int(y)) for x, y in entry["points"]]
+            contours_out.append({"points": pts, "label": normalize_label(entry.get("label"))})
+            continue
+        pts = [(int(x), int(y)) for x, y in entry]
+        contours_out.append({"points": pts, "label": LABEL_GOOD})
+    return contours_out
 
 
-def save_annotations(img_path: Path, polygons: list[list[tuple[int, int]]]) -> Path:
+def save_annotations(img_path: Path, polygons: list[LabeledContour]) -> Path:
     ANN_DIR.mkdir(parents=True, exist_ok=True)
     path = ann_path(img_path)
-    path.write_text(
-        json.dumps(
+    serialized = []
+    for contour in polygons:
+        serialized.append(
             {
-                "image": img_path.name,
-                "contours": [[[int(x), int(y)] for x, y in poly] for poly in polygons],
-            },
-            indent=2,
-        ),
+                "label": contour_label(contour),
+                "points": [[int(x), int(y)] for x, y in contour_points(contour)],
+            }
+        )
+    path.write_text(
+        json.dumps({"image": img_path.name, "contours": serialized}, indent=2),
         encoding="utf-8",
     )
     return path
 
 
-def export_yolo(img_path: Path, polygons: list[list[tuple[int, int]]], out_dir: Path = DEFAULT_OUT_DIR) -> Path:
+def export_yolo(img_path: Path, polygons: list[LabeledContour], out_dir: Path = DEFAULT_OUT_DIR) -> Path:
     if not polygons:
         raise ValueError("No polygons to export")
     with Image.open(img_path) as img:
         width, height = img.size
-    lines = [
-        line
-        for poly in polygons
-        if (line := polygon_to_yolo_line(poly, width=width, height=height, class_id=0, decimals=6))
-    ]
+    lines = []
+    for contour in polygons:
+        pts = contour_points(contour)
+        label = contour_label(contour)
+        cls_id = CLASS_IDS[label]
+        line = polygon_to_yolo_line(pts, width=width, height=height, class_id=cls_id, decimals=6)
+        if line:
+            lines.append(line)
     if not lines:
         raise ValueError("No valid polygons to export")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -109,69 +152,20 @@ def mask_to_polygons(mask: np.ndarray) -> list[list[tuple[int, int]]]:
     return polygons
 
 
-def _bin_image(img: np.ndarray, factor: int) -> np.ndarray:
-    h, w = img.shape[:2]
-    h2, w2 = h - h % factor, w - w % factor
-    img = img[:h2, :w2]
-    return np.stack([
-        img[:, :, c].reshape(h2 // factor, factor, w2 // factor, factor).mean(axis=(1, 3)).astype(np.uint8)
-        for c in range(3)
-    ], axis=2)
+def color_for_label(label: str) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
+    if label == LABEL_BAD:
+        return (255, 140, 60, 55), (255, 140, 60, 230)
+    return (60, 210, 120, 55), (60, 210, 120, 230)
 
 
-def _background_color_lab(img_lab: np.ndarray, corner_sz: int) -> np.ndarray:
-    h, w = img_lab.shape[:2]
-    csz = max(1, min(corner_sz, h // 4, w // 4))
-    patches = [
-        img_lab[:csz, :csz],
-        img_lab[:csz, -csz:],
-        img_lab[-csz:, :csz],
-        img_lab[-csz:, -csz:],
-    ]
-    medians = [np.median(p.reshape(-1, 3), axis=0) for p in patches]
-    best_pair, best_dist = (0, 1), float("inf")
-    for i in range(4):
-        for j in range(i + 1, 4):
-            dist = float(np.linalg.norm(medians[i] - medians[j]))
-            if dist < best_dist:
-                best_pair, best_dist = (i, j), dist
-    return np.mean([medians[best_pair[0]], medians[best_pair[1]]], axis=0)
-
-
-def auto_detect_polygons(img_bgr: np.ndarray) -> list[list[tuple[int, int]]]:
-    orig_h, orig_w = img_bgr.shape[:2]
-    binned = _bin_image(img_bgr, 4)
-    lab_bgr = cv2.cvtColor(binned, cv2.COLOR_BGR2LAB)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    lab_bgr[:, :, 0] = clahe.apply(lab_bgr[:, :, 0])
-    enhanced = cv2.cvtColor(lab_bgr, cv2.COLOR_LAB2BGR)
-    lab = cv2.cvtColor(enhanced, cv2.COLOR_BGR2LAB).astype(np.float32)
-    bg_lab = _background_color_lab(lab, 20)
-    diff = np.linalg.norm(lab - bg_lab, axis=2).astype(np.float32)
-    diff_u8 = cv2.normalize(diff, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    _, mask = cv2.threshold(diff_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (20, 20)))
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    bin_h, bin_w = binned.shape[:2]
-    sx, sy = orig_w / bin_w, orig_h / bin_h
-    polygons: list[list[tuple[int, int]]] = []
-    for contour in contours:
-        if cv2.contourArea(contour) < 300:
-            continue
-        epsilon = max(1.0, 0.002 * cv2.arcLength(contour, True))
-        approx = cv2.approxPolyDP(contour, epsilon, True).reshape(-1, 2)
-        poly = [
-            (
-                int(max(0, min(round(float(x) * sx), orig_w - 1))),
-                int(max(0, min(round(float(y) * sy), orig_h - 1))),
-            )
-            for x, y in approx
-        ]
-        if len(poly) >= MIN_POLY_POINTS:
-            polygons.append(poly)
-    return polygons
+def point_to_segment_dist(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> float:
+    dx, dy = bx - ax, by - ay
+    if dx == 0 and dy == 0:
+        return float(np.hypot(px - ax, py - ay))
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
+    qx = ax + t * dx
+    qy = ay + t * dy
+    return float(np.hypot(px - qx, py - qy))
 
 
 class OutlineTool(tk.Tk):
@@ -183,8 +177,9 @@ class OutlineTool(tk.Tk):
         self.idx = 0
         self.img_path: Path | None = None
         self.img_bgr: np.ndarray | None = None
-        self.polygons: list[list[tuple[int, int]]] = []
+        self.polygons: list[LabeledContour] = []
         self.active: list[tuple[int, int]] = []
+        self.selected_idx: int | None = None
         self.scale = 1.0
         self.offset = (0, 0)
         self._photo = None
@@ -196,6 +191,7 @@ class OutlineTool(tk.Tk):
         self.sam_encoded_path: Path | None = None
         self.sam_pos_points: list[tuple[int, int]] = []
         self.sam_neg_points: list[tuple[int, int]] = []
+        self.label_choice = tk.StringVar(value=LABEL_GOOD)
         self._build_ui()
         if self.paths:
             self.load_image(0)
@@ -206,6 +202,12 @@ class OutlineTool(tk.Tk):
         ttk.Button(controls, text="Open Folder", command=self.open_folder).pack(fill=tk.X, pady=2)
         ttk.Button(controls, text="Prev", command=lambda: self.load_image(self.idx - 1)).pack(fill=tk.X, pady=2)
         ttk.Button(controls, text="Next", command=lambda: self.load_image(self.idx + 1)).pack(fill=tk.X, pady=2)
+        ttk.Label(controls, text="Contour label:", font=("", 10, "bold")).pack(anchor=tk.W, pady=(12, 2))
+        label_row = ttk.Frame(controls)
+        label_row.pack(fill=tk.X)
+        ttk.Radiobutton(label_row, text="Good", value=LABEL_GOOD, variable=self.label_choice).pack(side=tk.LEFT)
+        ttk.Radiobutton(label_row, text="Bad", value=LABEL_BAD, variable=self.label_choice).pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Button(controls, text="Apply Label To Selected", command=self.apply_label_to_selected).pack(fill=tk.X, pady=(6, 0))
         ttk.Checkbutton(
             controls,
             text="SAM click mode",
@@ -236,6 +238,8 @@ class OutlineTool(tk.Tk):
         self.canvas.bind("<Double-Button-1>", lambda _e: self.finish_polygon())
         self.canvas.bind("<Button-3>", self.on_right_click)
         self.canvas.bind("<Configure>", lambda _e: self.redraw())
+        self.bind("g", lambda _e: self.label_choice.set(LABEL_GOOD))
+        self.bind("b", lambda _e: self.label_choice.set(LABEL_BAD))
 
     def open_folder(self) -> None:
         folder = filedialog.askdirectory(initialdir=str(IMG_DIR))
@@ -263,6 +267,7 @@ class OutlineTool(tk.Tk):
             return
         self.polygons = load_annotations(self.img_path)
         self.active = []
+        self.selected_idx = None
         self.sam_pos_points = []
         self.sam_neg_points = []
         self.sam_encoded_path = None
@@ -284,12 +289,47 @@ class OutlineTool(tk.Tk):
         ox, oy = self.offset
         return x * self.scale + ox, y * self.scale + oy
 
+    def hit_test_polygon(self, cx: float, cy: float) -> int | None:
+        best_idx = None
+        best_dist = 12.0
+        for idx, contour in enumerate(self.polygons):
+            pts_img = contour_points(contour)
+            if len(pts_img) < 2:
+                continue
+            pts_canvas = [self.canvas_point(x, y) for x, y in pts_img]
+            for j in range(len(pts_canvas)):
+                ax, ay = pts_canvas[j]
+                bx, by = pts_canvas[(j + 1) % len(pts_canvas)]
+                dist = point_to_segment_dist(cx, cy, ax, ay, bx, by)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_idx = idx
+        return best_idx
+
+    def apply_label_to_selected(self) -> None:
+        if self.selected_idx is None:
+            self.status.set("Select a contour first (click near its edge in manual mode).")
+            return
+        label = normalize_label(self.label_choice.get())
+        contour = self.polygons[self.selected_idx]
+        contour["label"] = label
+        self.status.set(f"Contour #{self.selected_idx + 1} labeled as {label}")
+        self.redraw()
+
     def add_point(self, event) -> None:
         if self.img_bgr is None:
             return
         if self.sam_mode.get():
             self.add_sam_point(event, positive=True)
             return
+        if not self.active:
+            hit = self.hit_test_polygon(float(event.x), float(event.y))
+            if hit is not None:
+                self.selected_idx = hit
+                lbl = contour_label(self.polygons[hit])
+                self.status.set(f"Selected contour #{hit + 1} ({lbl}). Press Apply Label To Selected to change.")
+                self.redraw()
+                return
         self.active.append(self.image_point(event))
         self.status.set(f"Drawing polygon: {len(self.active)} point(s)")
         self.redraw()
@@ -304,9 +344,11 @@ class OutlineTool(tk.Tk):
         if len(self.active) < MIN_POLY_POINTS:
             self.status.set(f"Need at least {MIN_POLY_POINTS} points")
             return
-        self.polygons.append(list(self.active))
+        label = normalize_label(self.label_choice.get())
+        self.polygons.append({"points": list(self.active), "label": label})
         self.active = []
-        self.status.set(f"Added polygon. Total: {len(self.polygons)}")
+        self.selected_idx = len(self.polygons) - 1
+        self.status.set(f"Added {label} polygon. Total: {len(self.polygons)}")
         self.redraw()
 
     def undo_point(self) -> None:
@@ -317,6 +359,7 @@ class OutlineTool(tk.Tk):
     def delete_last(self) -> None:
         if self.polygons:
             self.polygons.pop()
+            self.selected_idx = None
             self.status.set(f"Deleted last polygon. Total: {len(self.polygons)}")
             self.redraw()
 
@@ -434,7 +477,8 @@ class OutlineTool(tk.Tk):
             best_idx = int(scores.argmax())
             polygons = mask_to_polygons(masks[best_idx])
             if polygons:
-                self.polygons.extend(polygons)
+                label = normalize_label(self.label_choice.get())
+                self.polygons.extend([{"points": poly, "label": label} for poly in polygons])
                 self.sam_pos_points = []
                 self.sam_neg_points = []
                 self.after(0, self.redraw)
@@ -450,21 +494,6 @@ class OutlineTool(tk.Tk):
             self.after(0, lambda exc=exc: self.status.set(f"SAM click error: {exc}"))
         finally:
             self.sam_busy = False
-
-    def auto_propose(self) -> None:
-        if self.img_bgr is None:
-            return
-        proposed = auto_detect_polygons(self.img_bgr)
-        if not proposed:
-            self.status.set("Auto detector found no contours")
-            return
-        if self.polygons and not messagebox.askyesno("Replace contours?", "Replace current contours? Choose No to append."):
-            self.polygons.extend(proposed)
-        else:
-            self.polygons = proposed
-        self.active = []
-        self.status.set(f"Auto proposed {len(proposed)} contour(s)")
-        self.redraw()
 
     def save_json(self, silent: bool = False) -> None:
         if self.img_path is None:
@@ -501,14 +530,17 @@ class OutlineTool(tk.Tk):
         canvas_img.paste(pil, (ox, oy))
         draw = ImageDraw.Draw(canvas_img, "RGBA")
 
-        for idx, poly in enumerate(self.polygons):
-            pts = [self.canvas_point(x, y) for x, y in poly]
+        for idx, contour in enumerate(self.polygons):
+            pts = [self.canvas_point(x, y) for x, y in contour_points(contour)]
+            label = contour_label(contour)
+            fill_rgba, stroke_rgba = color_for_label(label)
             if len(pts) >= 3:
                 flat = [v for pt in pts for v in pt]
-                draw.polygon(flat, fill=(50, 180, 255, 55))
+                draw.polygon(flat, fill=fill_rgba)
                 for a, b in zip(pts, pts[1:] + pts[:1]):
-                    draw.line([a, b], fill=(50, 180, 255, 230), width=2)
-                draw.text(pts[0], f"#{idx + 1}", fill=(255, 255, 255, 240))
+                    draw.line([a, b], fill=stroke_rgba, width=3 if idx == self.selected_idx else 2)
+                prefix = "G" if label == LABEL_GOOD else "B"
+                draw.text(pts[0], f"{prefix}{idx + 1}", fill=(255, 255, 255, 240))
 
         if self.active:
             pts = [self.canvas_point(x, y) for x, y in self.active]
