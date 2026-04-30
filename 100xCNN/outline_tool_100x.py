@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
 from pathlib import Path
 
 import cv2
@@ -19,6 +20,10 @@ BASE = Path(__file__).resolve().parent
 IMG_DIR = BASE / "images"
 ANN_DIR = BASE / "contour_annotations"
 MIN_POLY_POINTS = 3
+SAM_CKPT_CANDIDATES = [
+    BASE / "sam_vit_b_01ec64.pth",
+    BASE.parent / "Brody's Work" / "sam_vit_b_01ec64.pth",
+]
 
 
 def image_paths() -> list[Path]:
@@ -72,6 +77,36 @@ def export_yolo(img_path: Path, polygons: list[list[tuple[int, int]]], out_dir: 
     label_path = out_dir / f"{img_path.stem}.txt"
     label_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return label_path
+
+
+def pick_sam_checkpoint() -> Path | None:
+    for path in SAM_CKPT_CANDIDATES:
+        if path.is_file():
+            return path
+    return None
+
+
+def pick_device(torch_module) -> str:
+    if torch_module.cuda.is_available():
+        return "cuda"
+    if torch_module.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def mask_to_polygons(mask: np.ndarray) -> list[list[tuple[int, int]]]:
+    mask_u8 = mask.astype(np.uint8)
+    contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    polygons: list[list[tuple[int, int]]] = []
+    for contour in contours:
+        if cv2.contourArea(contour) < 1:
+            continue
+        epsilon = max(1.0, 0.002 * cv2.arcLength(contour, True))
+        approx = cv2.approxPolyDP(contour, epsilon, True).reshape(-1, 2)
+        poly = [(int(x), int(y)) for x, y in approx]
+        if len(poly) >= MIN_POLY_POINTS:
+            polygons.append(poly)
+    return polygons
 
 
 def _bin_image(img: np.ndarray, factor: int) -> np.ndarray:
@@ -153,6 +188,14 @@ class OutlineTool(tk.Tk):
         self.scale = 1.0
         self.offset = (0, 0)
         self._photo = None
+        self.sam_mode = tk.BooleanVar(value=False)
+        self.sam_predictor = None
+        self.sam_lock = threading.Lock()
+        self.sam_ready = False
+        self.sam_busy = False
+        self.sam_encoded_path: Path | None = None
+        self.sam_pos_points: list[tuple[int, int]] = []
+        self.sam_neg_points: list[tuple[int, int]] = []
         self._build_ui()
         if self.paths:
             self.load_image(0)
@@ -163,9 +206,19 @@ class OutlineTool(tk.Tk):
         ttk.Button(controls, text="Open Folder", command=self.open_folder).pack(fill=tk.X, pady=2)
         ttk.Button(controls, text="Prev", command=lambda: self.load_image(self.idx - 1)).pack(fill=tk.X, pady=2)
         ttk.Button(controls, text="Next", command=lambda: self.load_image(self.idx + 1)).pack(fill=tk.X, pady=2)
-        ttk.Button(controls, text="Auto Propose Contours", command=self.auto_propose).pack(fill=tk.X, pady=(16, 2))
+        ttk.Checkbutton(
+            controls,
+            text="SAM click mode",
+            variable=self.sam_mode,
+            command=self.on_sam_toggle,
+        ).pack(fill=tk.X, pady=(16, 2))
+        ttk.Label(
+            controls,
+            text="With SAM checked: left-click adds a SAM mask, right-click adds an exclude point.",
+            wraplength=220,
+        ).pack(fill=tk.X, pady=(0, 8))
         ttk.Button(controls, text="Save JSON", command=self.save_json).pack(fill=tk.X, pady=2)
-        ttk.Button(controls, text="Export YOLO Label", command=self.export_label).pack(fill=tk.X, pady=2)
+        ttk.Button(controls, text="Export Training Label", command=self.export_label).pack(fill=tk.X, pady=2)
         ttk.Button(controls, text="Undo Point", command=self.undo_point).pack(fill=tk.X, pady=(16, 2))
         ttk.Button(controls, text="Finish Polygon", command=self.finish_polygon).pack(fill=tk.X, pady=2)
         ttk.Button(controls, text="Delete Last Polygon", command=self.delete_last).pack(fill=tk.X, pady=2)
@@ -173,7 +226,7 @@ class OutlineTool(tk.Tk):
         ttk.Label(controls, textvariable=self.status, wraplength=220).pack(fill=tk.X, pady=(16, 0))
         ttk.Label(
             controls,
-            text="Left-click: add point\nDouble-click: finish\nRight-click: undo point",
+            text="Manual mode:\nLeft-click: add point\nDouble-click: finish\nRight-click: undo point",
             wraplength=220,
         ).pack(fill=tk.X, pady=(16, 0))
 
@@ -181,7 +234,7 @@ class OutlineTool(tk.Tk):
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.canvas.bind("<Button-1>", self.add_point)
         self.canvas.bind("<Double-Button-1>", lambda _e: self.finish_polygon())
-        self.canvas.bind("<Button-3>", lambda _e: self.undo_point())
+        self.canvas.bind("<Button-3>", self.on_right_click)
         self.canvas.bind("<Configure>", lambda _e: self.redraw())
 
     def open_folder(self) -> None:
@@ -210,8 +263,13 @@ class OutlineTool(tk.Tk):
             return
         self.polygons = load_annotations(self.img_path)
         self.active = []
+        self.sam_pos_points = []
+        self.sam_neg_points = []
+        self.sam_encoded_path = None
         self.status.set(f"[{self.idx + 1}/{len(self.paths)}] {self.img_path.name} - {len(self.polygons)} contour(s)")
         self.redraw()
+        if self.sam_mode.get() and self.sam_ready:
+            threading.Thread(target=self.encode_sam_image, daemon=True).start()
 
     def image_point(self, event) -> tuple[int, int]:
         ox, oy = self.offset
@@ -229,9 +287,18 @@ class OutlineTool(tk.Tk):
     def add_point(self, event) -> None:
         if self.img_bgr is None:
             return
+        if self.sam_mode.get():
+            self.add_sam_point(event, positive=True)
+            return
         self.active.append(self.image_point(event))
         self.status.set(f"Drawing polygon: {len(self.active)} point(s)")
         self.redraw()
+
+    def on_right_click(self, event) -> None:
+        if self.sam_mode.get():
+            self.add_sam_point(event, positive=False)
+            return
+        self.undo_point()
 
     def finish_polygon(self) -> None:
         if len(self.active) < MIN_POLY_POINTS:
@@ -252,6 +319,137 @@ class OutlineTool(tk.Tk):
             self.polygons.pop()
             self.status.set(f"Deleted last polygon. Total: {len(self.polygons)}")
             self.redraw()
+
+    def on_sam_toggle(self) -> None:
+        if not self.sam_mode.get():
+            self.status.set("SAM mode off. Manual polygon drawing enabled.")
+            return
+        self.active = []
+        self.redraw()
+        if self.sam_ready:
+            if self.img_path != self.sam_encoded_path:
+                threading.Thread(target=self.encode_sam_image, daemon=True).start()
+            else:
+                self.status.set("SAM mode on. Left-click a flake to add its mask.")
+            return
+        threading.Thread(target=self.load_sam, daemon=True).start()
+
+    def load_sam(self) -> None:
+        if self.sam_ready or self.sam_busy:
+            return
+        self.sam_busy = True
+        self.after(0, lambda: self.status.set("Loading SAM..."))
+        try:
+            import torch
+            from segment_anything import SamPredictor, sam_model_registry
+
+            checkpoint = pick_sam_checkpoint()
+            if checkpoint is None:
+                raise FileNotFoundError(
+                    "Missing sam_vit_b_01ec64.pth. Put it in 100xCNN/ or Brody's Work/."
+                )
+
+            device = pick_device(torch)
+            sam = sam_model_registry["vit_b"](checkpoint=str(checkpoint))
+            sam.to(device)
+            sam.eval()
+            predictor = SamPredictor(sam)
+            with self.sam_lock:
+                self.sam_predictor = predictor
+                self.sam_ready = True
+            self.after(0, lambda: self.status.set(f"SAM ready on {device}. Encoding image..."))
+            self.encode_sam_image(torch_module=torch)
+        except Exception as exc:
+            self.after(0, lambda exc=exc: self.status.set(f"SAM load error: {exc}"))
+        finally:
+            self.sam_busy = False
+
+    def encode_sam_image(self, torch_module=None) -> None:
+        if self.sam_predictor is None or self.img_bgr is None or self.img_path is None:
+            return
+        self.sam_busy = True
+        path = self.img_path
+        self.after(0, lambda: self.status.set(f"Encoding {path.name} for SAM..."))
+        try:
+            if torch_module is None:
+                import torch as torch_module
+            rgb = cv2.cvtColor(self.img_bgr, cv2.COLOR_BGR2RGB)
+            with self.sam_lock, torch_module.inference_mode():
+                self.sam_predictor.set_image(rgb)
+            self.sam_encoded_path = path
+            self.after(0, lambda: self.status.set("SAM ready. Left-click a flake to add its mask."))
+        except Exception as exc:
+            self.after(0, lambda exc=exc: self.status.set(f"SAM encode error: {exc}"))
+        finally:
+            self.sam_busy = False
+
+    def add_sam_point(self, event, *, positive: bool) -> None:
+        if self.img_bgr is None:
+            return
+        point = self.image_point(event)
+        if positive:
+            self.sam_pos_points.append(point)
+        else:
+            self.sam_neg_points.append(point)
+
+        if not self.sam_ready or self.sam_predictor is None:
+            self.status.set("SAM is still loading. Try again in a moment.")
+            return
+        if self.sam_busy:
+            self.status.set("SAM is busy. Try again in a moment.")
+            return
+        if self.sam_encoded_path != self.img_path:
+            threading.Thread(target=self.encode_sam_image, daemon=True).start()
+            return
+        if not self.sam_pos_points:
+            self.status.set("Add a positive left-click before exclude points.")
+            return
+        threading.Thread(target=self.run_sam_click, daemon=True).start()
+
+    def run_sam_click(self) -> None:
+        if self.sam_predictor is None or self.img_bgr is None:
+            return
+        self.sam_busy = True
+        pos_points = list(self.sam_pos_points)
+        neg_points = list(self.sam_neg_points)
+        all_points = pos_points + neg_points
+        all_labels = [1] * len(pos_points) + [0] * len(neg_points)
+        self.after(
+            0,
+            lambda: self.status.set(
+                f"Running SAM with {len(pos_points)} include / {len(neg_points)} exclude point(s)..."
+            ),
+        )
+        try:
+            import torch
+
+            coords = np.array(all_points, dtype=np.float32)
+            labels = np.array(all_labels, dtype=np.int32)
+            with self.sam_lock, torch.inference_mode():
+                masks, scores, _ = self.sam_predictor.predict(
+                    point_coords=coords,
+                    point_labels=labels,
+                    multimask_output=True,
+                )
+            best_idx = int(scores.argmax())
+            polygons = mask_to_polygons(masks[best_idx])
+            if polygons:
+                self.polygons.extend(polygons)
+                self.sam_pos_points = []
+                self.sam_neg_points = []
+                self.after(0, self.redraw)
+                self.after(
+                    0,
+                    lambda: self.status.set(
+                        f"SAM added {len(polygons)} mask contour(s), score={float(scores[best_idx]):.3f}"
+                    ),
+                )
+            else:
+                self.after(0, lambda: self.status.set("SAM did not return a valid contour"))
+        except Exception as exc:
+            self.after(0, lambda exc=exc: self.status.set(f"SAM click error: {exc}"))
+        finally:
+            self.sam_busy = False
 
     def auto_propose(self) -> None:
         if self.img_bgr is None:
@@ -289,10 +487,11 @@ class OutlineTool(tk.Tk):
     def redraw(self) -> None:
         if self.img_bgr is None:
             return
-        cw, ch = self.canvas.winfo_width() or 900, self.canvas.winfo_height() or 700
+        cw = max(self.canvas.winfo_width(), 900)
+        ch = max(self.canvas.winfo_height(), 700)
         h, w = self.img_bgr.shape[:2]
         self.scale = min(cw / w, ch / h)
-        dw, dh = int(w * self.scale), int(h * self.scale)
+        dw, dh = max(1, int(w * self.scale)), max(1, int(h * self.scale))
         ox, oy = (cw - dw) // 2, (ch - dh) // 2
         self.offset = (ox, oy)
 

@@ -18,7 +18,10 @@ Self-contained tools for building a 100x flake mask detector with YOLO segmentat
    python3 outline_tool_100x.py
    ```
 
-   Use `Auto Propose Contours`, correct the outlines, then `Export YOLO Label`.
+   Check `SAM click mode`, then left-click a flake to have SAM propose its mask.
+   Right-click adds an exclude point if SAM grabs too much. You can also leave
+   SAM unchecked and draw polygons manually. When the mask looks right, use
+   `Export Training Label`.
 
 2. Export all saved JSON annotations:
 
@@ -45,3 +48,7 @@ Self-contained tools for building a 100x flake mask detector with YOLO segmentat
    ```
 
 The trained weights are copied to `flake_seg_100x_best.pt` in this folder.
+
+`Export Training Label` writes the YOLO segmentation label format. YOLO here is
+the CNN segmentation model being trained; the export step is just how masks get
+saved for training.
