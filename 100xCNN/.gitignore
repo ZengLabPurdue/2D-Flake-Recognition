@@ -1,4 +1,6 @@
 # Keep generated data and model artifacts out of git by default.
+__pycache__/
+*.pyc
 images/*
 contour_annotations/*
 training_images_100x/*
