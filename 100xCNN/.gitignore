@@ -1,0 +1,12 @@
+# Keep generated data and model artifacts out of git by default.
+images/*
+contour_annotations/*
+training_images_100x/*
+labeled_seg_split_100x/*
+segmentation_outputs_100x/*
+runs/*
+*.pt
+
+!images/.gitkeep
+!contour_annotations/.gitkeep
+!training_images_100x/.gitkeep
