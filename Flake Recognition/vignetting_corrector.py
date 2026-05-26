@@ -8,9 +8,7 @@ import matplotlib.pyplot as plt
 image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
 flatfield_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
 
-def vignetting_correction_direct_single_channel(image_path, flatfield_path):
-    image = cv2.imread(image_path).astype(np.float32)
-    flatfield = cv2.imread(flatfield_path).astype(np.float32)
+def vignetting_correction_direct_single_channel(image, flatfield): # bgr
 
     if image.shape != flatfield.shape:
         raise ValueError("Image and flat-field must have the same dimensions")
@@ -28,12 +26,7 @@ def vignetting_correction_direct_single_channel(image_path, flatfield_path):
     corrected = np.clip(corrected, 0, 255).astype(np.uint8)
     return cv2.cvtColor(corrected, cv2.COLOR_BGR2RGB)
 
-def vignetting_correction_direct_multi_channel(image_path, flatfield_path):
-    import cv2
-    import numpy as np
-
-    image = cv2.imread(image_path).astype(np.float32)
-    flatfield = cv2.imread(flatfield_path).astype(np.float32)
+def vignetting_correction_direct_multi_channel(image, flatfield):
 
     if image.shape != flatfield.shape:
         raise ValueError("Image and flat-field must have the same dimensions")
@@ -79,10 +72,7 @@ def fit_polynomial_surface(flatfield_single_channel, degree=2):
     V = (A @ coeffs).reshape(h, w)
     return V
 
-def vignetting_correction_poly_all_channels(image_path, flatfield_path, degree=2):
-
-    image = cv2.imread(image_path).astype(np.float32)
-    flatfield = cv2.imread(flatfield_path).astype(np.float32)
+def vignetting_correction_poly_all_channels(image, flatfield, degree=2):
 
     if image.shape != flatfield.shape:
         raise ValueError("Image and flat-field must have the same dimensions and channels")
@@ -137,24 +127,29 @@ def vignetting_correction_poly_max(image_path, flatfield_path, degree=2):
     corrected = np.clip(corrected, 0, 255).astype(np.uint8)
     return cv2.cvtColor(corrected, cv2.COLOR_BGR2RGB)
 
-image = cv2.imread(image_path)
-image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-corrected_image = vignetting_correction_poly_all_channels(image_path, flatfield_path)
+if __name__ == "__main__":
+    image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
+    flatfield_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
 
-plt.figure(figsize=(10, 5))
+    image = cv2.imread(image_path)
+    flatfield= cv2.imread(flatfield_path)
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    corrected_image = vignetting_correction_poly_all_channels(image, flatfield, degree=2)
 
-plt.subplot(1, 2, 1)
-plt.imshow(image_rgb)
-plt.title("Original")
-plt.axis("off")
+    plt.figure(figsize=(10, 5))
 
-plt.subplot(1, 2, 2)
-plt.imshow(corrected_image)
-plt.title("Corrected")
-plt.axis("off")
+    plt.subplot(1, 2, 1)
+    plt.imshow(image_rgb)
+    plt.title("Original")
+    plt.axis("off")
 
-plt.tight_layout()
+    plt.subplot(1, 2, 2)
+    plt.imshow(corrected_image)
+    plt.title("Corrected")
+    plt.axis("off")
 
-corrected_image_gray = cv2.cvtColor(corrected_image, cv2.COLOR_RGB2GRAY)
-DataVisualizer.surface_graphing(corrected_image_gray)
-Util.save_image(corrected_image)
+    plt.tight_layout()
+
+    corrected_image_gray = cv2.cvtColor(corrected_image, cv2.COLOR_RGB2GRAY)
+    DataVisualizer.surface_graphing(corrected_image_gray)
+    Util.save_image(corrected_image)

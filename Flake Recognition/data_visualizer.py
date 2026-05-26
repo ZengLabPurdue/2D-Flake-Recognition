@@ -198,3 +198,16 @@ class DataVisualizer():
             fontsize=12
         )
         plt.show()
+
+if __name__ == "__main__":
+    image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
+    
+    img = cv2.imread(image_path)
+
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    v = hsv[:, :, 2]
+
+    b = img[:, :, 0]
+    g = img[:, :, 1]    
+    
+    DataVisualizer.surface_graphing(g)
