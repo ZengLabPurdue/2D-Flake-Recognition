@@ -1,8 +1,11 @@
 import os
 import sys
 import re
+
+import ctypes
 import threading
 from queue import Queue
+from collections import deque
 
 import time
 from datetime import datetime
@@ -61,7 +64,8 @@ X_SIZE_2 = 10642
 Y_SIZE_2 = 7027
 
 PIXEL_SIZE_2X_HIGH = 1.92864 # um
-PIXEL_SIZE_2X_MED = 3.85728 # um
+PIXEL_SIZE_2X_MED = 3.87297 # um
+PIXEL_SIZE_2X_LOW = 5.81395 # um
 
 X_SIZE_10 = 2142 
 Y_SIZE_10 = 1359
@@ -112,6 +116,7 @@ class App:
         self.hold_job = None
         self.is_hold = False
 
+        self.frame_buffer = deque(maxlen=1)
         self.hcam = None
         self.buf = None
         self.prevImg = None
@@ -168,6 +173,12 @@ class App:
             "var": BooleanVar(value=False)
         })
 
+        self.panels.append({
+            "name": "Resolution Panel",
+            "frame": self.init_resolution_panel(),
+            "var": BooleanVar(value=False)
+        })
+
         self.update_panels()
 
         self.init_menu_bar()
@@ -175,6 +186,8 @@ class App:
         self.root.bind_all("<Button-1>", self.clear_focus, add="+")
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        self.process_frame()
 
     # ------------- Initialization -------------
 
@@ -868,6 +881,66 @@ class App:
 
         return self.focus_panel
 
+    def init_resolution_panel(self):
+
+        self.resolution_panel = Frame(
+            self.main_frame,
+            bg="#f0f0f0",
+            width=204,
+            height=155
+        )
+        self.resolution_panel.place(relx=1.0, rely=0.0, anchor="ne")
+
+        self.resolution_background = Frame(
+            self.resolution_panel,
+            bg="white",
+            width=200,
+            height=153
+        )
+        self.resolution_background.place(x=2, y=0)
+
+        resolution_title = Label(
+            self.resolution_panel,
+            text="Resolution",
+            bg="white",
+            fg="black",
+            font=("TkDefaultFont", 13)
+        )
+        resolution_title.place(relx=0.5, y=10, anchor="n")
+
+        style = ttk.Style()
+        style.configure("Res.TButton", background="white")
+        style.configure("Res.TButton", relief="flat")
+
+        self.resolution_high_button = ttk.Button(
+            self.resolution_background,
+            text="High",
+            style="Res.TButton",
+            command=lambda: self.change_resolution(0)
+        )
+        self.resolution_high_button.place(relx=0.5, y=55, anchor="center")
+        self.buttons.append(self.resolution_high_button)
+
+        self.resolution_med_button = ttk.Button(
+            self.resolution_background,
+            text="Medium",
+            style="Res.TButton",
+            command=lambda: self.change_resolution(1)
+        )
+        self.resolution_med_button.place(relx=0.5, y=90, anchor="center")
+        self.buttons.append(self.resolution_med_button)
+
+        self.resolution_low_button = ttk.Button(
+            self.resolution_background,
+            text="Low",
+            style="Res.TButton",
+            command=lambda: self.change_resolution(2)
+        )
+        self.resolution_low_button.place(relx=0.5, y=125, anchor="center")
+        self.buttons.append(self.resolution_low_button)
+
+        return self.resolution_panel
+
     # ------------- Stage/Objective Control Functions -------------
 
     # XY Control Functions
@@ -1103,21 +1176,35 @@ class App:
         sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
 
         self.sharpness_var.set(f"Sharpness: {sharpness:.3f}")
+        self.root.update_idletasks()
 
         return sharpness
 
     def get_raw_sharpness(self, num_images=2):
-        self.wait_until_new_frame()
 
-        sharpness = 0
+        sharpness_values = []
 
-        for _ in range(num_images):
-            self.wait_until_new_frame()
-            sharpness += self.find_sharpness(self.current_frame)
+        start_time = time.time()
 
-        sharpness /= num_images
+        while len(sharpness_values) < num_images:
+            try:
+                data = self.frame_buffer[-1]
+                if data["stage_busy"]:
+                    continue
+                if data["timestamp"] < start_time:
+                    continue
+                frame = data["frame"]
+                sharpness = self.find_sharpness(frame)
+                sharpness_values.append(sharpness)
+            except Exception:
+                print("Frame timeout")
+                break
 
-        return sharpness
+        if not sharpness_values:
+            print("No frames available for sharpness.")
+            return 0
+
+        return sum(sharpness_values) / len(sharpness_values)
 
     def discard_initial_frame(self, position):
         discard_z = position
@@ -1206,7 +1293,7 @@ class App:
         self.map_center_x = self.true_map.shape[1] // 2
         self.map_center_y = self.true_map.shape[0] // 2
 
-    def place_live_frame_on_map(self, img, zoom):
+    def place_live_frame_on_map(self, img, cur_X, cur_Y, zoom):
 
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
@@ -1217,27 +1304,25 @@ class App:
         h, w = img_rgb.shape[:2]
 
         self.get_position()
-        current_x = x_pos
-        current_y = y_pos
 
-        if self.prev_x == current_x and self.prev_y == current_y:
+        if self.prev_x == cur_X and self.prev_y == cur_Y:
             return
 
-        self.prev_x = current_x
-        self.prev_y = current_y
+        self.prev_x = cur_X
+        self.prev_y = cur_Y
 
-        dx_um = current_x - self.stage_center_x
-        dy_um = current_y - self.stage_center_y
+        dx_um = cur_X - self.stage_center_x
+        dy_um = cur_Y - self.stage_center_y
 
         pixels_per_um = (1.0 / PIXEL_SIZE_2X_HIGH) / zoom
 
-        dx_px = int(dx_um * pixels_per_um)
-        dy_px = int(dy_um * pixels_per_um)
+        dx_px = - int(dx_um * pixels_per_um)
+        dy_px = - int(dy_um * pixels_per_um)
 
         map_x = self.map_center_x + dx_px
         map_y = self.map_center_y + dy_px
 
-        print(f"Stage Pos: ({current_x:.1f} µm, {current_y:.1f} µm) | Map Pos: ({map_x}, {map_y})")
+        print(f"Stage Pos: ({cur_X:.1f} µm, {cur_Y:.1f} µm) | Map Pos: ({map_x}, {map_y})")
 
         x_start = int(map_x - w // 2)
         y_start = int(map_y - h // 2)
@@ -1264,13 +1349,7 @@ class App:
 
         existing = self.true_map[y0:y1, x0:x1]
 
-        blended = cv2.addWeighted(
-            existing,
-            0.5,
-            crop,
-            0.5,
-            0
-        )
+        blended = cv2.addWeighted(existing, 0.5, crop, 0.5, 0)
 
         self.true_map[y0:y1, x0:x1] = blended
 
@@ -1506,57 +1585,53 @@ class App:
         cy = h // 2
 
         if self.view_mode == "Camera View":
-            if self.magnification == "2x":
-                crop_w = int(w * CENTER_CROP_WIDTH_RATIO_2X)
-                crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_2X)
-            elif self.magnification == "10x":
-                crop_w = int(w * CENTER_CROP_WIDTH_RATIO_10X)
-                crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_10X)
-            elif self.magnification == "20x":
-                crop_w = int(w * CENTER_CROP_WIDTH_RATIO_20X)
-                crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_20X)
-            elif self.magnification == "100x":
-                crop_w = int(w * CENTER_CROP_WIDTH_RATIO_100X)
-                crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_100X)
+            mag = self.magnification
+
+            if mag == "2x":
+                cw = CENTER_CROP_WIDTH_RATIO_2X
+                ch = CENTER_CROP_HEIGHT_RATIO_2X
+            elif mag == "10x":
+                cw = CENTER_CROP_WIDTH_RATIO_10X
+                ch = CENTER_CROP_HEIGHT_RATIO_10X
+            elif mag == "20x":
+                cw = CENTER_CROP_WIDTH_RATIO_20X
+                ch = CENTER_CROP_HEIGHT_RATIO_20X
+            elif mag == "100x":
+                cw = CENTER_CROP_WIDTH_RATIO_100X
+                ch = CENTER_CROP_HEIGHT_RATIO_100X
             else:
-                crop_w = w
-                crop_h = h
+                cw = ch = 1.0
 
-            x1 = cx - crop_w // 2
-            y1 = cy - crop_h // 2
-            x2 = cx + crop_w // 2
-            y2 = cy + crop_h // 2
+            crop_w = int(w * cw)
+            crop_h = int(h * ch)
 
-            img_rgb = img_rgb.copy()
-            cv2.rectangle(img_rgb, (x1, y1), (x2, y2), (0, 255, 0), 5)
+            x1 = cx - (crop_w >> 1)
+            y1 = cy - (crop_h >> 1)
+            x2 = x1 + crop_w
+            y2 = y1 + crop_h
 
-        cv2.circle(
-            img_rgb,
-            (cx, cy),
-            8,
-            (255, 0, 0),
-            -1
-        )
+            frame = img_rgb.copy()
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
+        else:
+            frame = img_rgb
 
-        img_pil = Image.fromarray(img_rgb)
+        cv2.circle(frame, (cx, cy), 2, (255, 0, 0), -1)
 
-        lbl_w = self.img_label.winfo_width() or self.width
-        lbl_h = self.img_label.winfo_height() or self.height
+        lbl = self.img_label
+        lbl_w = lbl.winfo_width() or self.width
+        lbl_h = lbl.winfo_height() or self.height
 
         if lbl_w < 10 or lbl_h < 10:
             return
 
-        img_pil_copy = img_pil.copy()
-        img_pil_copy.thumbnail((lbl_w, lbl_h), Image.Resampling.LANCZOS)
+        img = Image.fromarray(frame)
 
-        display_img = Image.new("RGB", (lbl_w, lbl_h), "#f0f0f0")
-        x_offset = (lbl_w - img_pil_copy.width) // 2
-        y_offset = (lbl_h - img_pil_copy.height) // 2
-        display_img.paste(img_pil_copy, (x_offset, y_offset))
+        img = img.resize((lbl_w, lbl_h), Image.Resampling.BILINEAR)
 
-        img_tk = ImageTk.PhotoImage(display_img)
-        self.img_label.configure(image=img_tk)
-        self.img_label.image = img_tk
+
+        tk_img = ImageTk.PhotoImage(img)
+        lbl.configure(image=tk_img)
+        lbl.image = tk_img
 
     # ------------- Setting and Saving Functions -------------
 
@@ -1687,8 +1762,6 @@ class App:
             ctx.on_image()
 
     def on_image(self):
-        #print(f"New Frame Time: {time.time()-self.start_camera_frame_timer}")
-        #self.start_camera_frame_timer = time.time()
         try:
             self.hcam.PullImageV2(self.buf, 24, None)
 
@@ -1696,24 +1769,49 @@ class App:
             img = np.frombuffer(self.buf, dtype=np.uint8).reshape(self.height, row_bytes)
             img = img[:, :self.width * 3].reshape(self.height, self.width, 3)
             img = cv2.flip(img, -1)
-            self.current_frame = img.copy()
+
+            frame_data = {
+                "frame": img,
+                "timestamp": time.time(),
+                "x": x_pos,
+                "y": y_pos,
+                "frame_id": self.frame_id,
+                "stage_busy": pc.is_busy()
+            }
+
+            self.frame_buffer.append(frame_data)
+
             self.frame_id += 1
-    
-            if self.live_mapping_var.get() and not pc.is_busy():
-                self.place_live_frame_on_map(cv2.flip(self.capture_frame(), -1), zoom=4)
-
-            if self.view_mode == "Map": return
-            
-            if self.view_mode == "Camera View" and not self.scan_running:
-                if self.filter_var.get():
-                    self.display_image(cv2.cvtColor(chip_edge_classifier.chip_filter(img), cv2.COLOR_GRAY2RGB))
-                else:
-                    self.display_image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-
-            self.find_sharpness(self.current_frame)
 
         except amcam.HRESULTException as ex:
             print("Camera error:", ex)
+
+    def process_frame(self):
+        try:
+            if len(self.frame_buffer) == 0:
+                self.root.after(10, self.process_frame)
+                return
+            data = self.frame_buffer[-1]
+            img = data["frame"]
+            self.current_frame = img
+
+            self.find_sharpness(self.current_frame)
+
+            if self.live_mapping_var.get():
+                self.place_live_frame_on_map(self.crop_frame(img), data["x"], data["y"], zoom=4)
+            if self.view_mode == "Camera View":
+                if self.filter_var.get():
+                    display = cv2.cvtColor(chip_edge_classifier.chip_filter(img), cv2.COLOR_GRAY2RGB)
+                else:
+                    display = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                self.display_image(display)
+            elif self.view_mode == "Map":
+                self.display_map()
+
+        except Exception as ex:
+            print("Frame processing error:", ex)
+
+        self.root.after(10, self.process_frame)
 
     def run_camera(self):
         cams = amcam.Amcam.EnumV2()
@@ -1729,11 +1827,11 @@ class App:
         '''
         #self.reset_camera_settings(self.hcam)
 
-        self.hcam.put_eSize(2)
+        self.hcam.put_eSize(0)
         
         self.width, self.height = self.hcam.get_Size()
         bufsize = ((self.width * 24 + 31) // 32 * 4) * self.height
-        self.buf = bytes(bufsize)
+        self.buf = ctypes.create_string_buffer(bufsize)
 
         self.frame_id = 0
 
@@ -1755,25 +1853,23 @@ class App:
         num_res = self.hcam.ResolutionNumber()
         for i in range(num_res):
             print(f"Resolution {i}: {self.hcam.get_Resolution(i)}")
-
-        width, height = self.hcam.get_Size()
-        print(f"Current Resolution: ({width}, {height})")
+        print(f"Current Resolution: ({self.width}, {self.height})")
         
         max_speed = self.hcam.MaxSpeed()
         self.hcam.put_Speed(max_speed)
 
     # image should be in BGR
-    def save_image(self, image=None, save_dir=None, filename=None, output=False):
+    def save_image(self, image=None, save_dir=None, filename=None, output=True):
         if image is None:
-            if not hasattr(self, "current_frame") or self.current_frame is None:
-                print("No frame available to save.")
-                return
-            image = self.current_frame
+            image = self.frame_buffer[-1]["frame"].copy()
 
         if save_dir is None:
             save_dir = home_dir / "Saved Images"
         else:
             save_dir = Path(save_dir)
+
+        cv2.imshow("Saved Image", image)
+        cv2.waitKey(1)
 
         save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1788,34 +1884,45 @@ class App:
         if output:
             print(f"Image saved to {filepath}")
 
-    def wait_until_new_frame(self):
-        old_frame = self.frame_id
-        start = time.time()
-        while self.frame_id == old_frame:
-            self.root.update()
-            time.sleep(0.005)
-            if time.time() - start > 1:
+    def capture_frame(self, num_images=2):
+
+        frames = []
+
+        start_time = time.time()
+
+        while len(frames) < num_images:
+            try:
+                data = self.frame_buffer[-1]
+                if data["stage_busy"]:
+                    continue
+                if data["timestamp"] < start_time:
+                    continue
+                frames.append(data["frame"].astype(np.float32))
+            except Exception:
                 print("Frame timeout")
                 break
 
-    def capture_frame(self, num_images=2):
-        self.wait_until_new_frame()
+        if not frames:
+            return None
 
-        sum_frame = np.zeros_like(self.current_frame, dtype=np.float32)
+        avg_frame = np.mean(frames, axis=0).astype(np.uint8)
 
-        for _ in range(num_images):
-            self.wait_until_new_frame()
-            sum_frame += self.current_frame.astype(np.float32)
+        avg_frame = self.crop_frame(avg_frame)
 
-        avg_frame = (sum_frame / num_images).astype(self.current_frame.dtype)
+        return avg_frame
+    
+    def crop_frame(self, frame):
 
-        h, w = avg_frame.shape[:2]
+        h, w = frame.shape[:2]
+
         if self.magnification == "2x":
             crop_w = int(w * CENTER_CROP_WIDTH_RATIO_2X)
             crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_2X)
+
         elif self.magnification == "10x":
             crop_w = int(w * CENTER_CROP_WIDTH_RATIO_10X)
             crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_10X)
+
         cx, cy = w // 2, h // 2
 
         x1 = cx - crop_w // 2
@@ -1823,20 +1930,31 @@ class App:
         x2 = cx + crop_w // 2
         y2 = cy + crop_h // 2
 
-        cropped_frame = avg_frame[y1:y2, x1:x2]
+        return frame[y1:y2, x1:x2]
 
-        return cropped_frame
-    
     def capture_frame_raw(self, num_images=2):
-        self.wait_until_new_frame()
 
-        sum_frame = np.zeros_like(self.current_frame, dtype=np.float32)
+        frames = []
+        
+        start_time = time.time()
 
-        for _ in range(num_images):
-            self.wait_until_new_frame()
-            sum_frame += self.current_frame.astype(np.float32)
+        while len(frames) < num_images:
+            try:
+                data = self.frame_buffer[-1]
+                if data["stage_busy"]:
+                    continue
+                if data["timestamp"] < start_time:
+                    continue
+                frames.append(data["frame"].astype(np.float32))
+            except Exception:
+                print("Frame timeout")
+                break
 
-        avg_frame = (sum_frame / num_images).astype(self.current_frame.dtype)
+        if not frames:
+            print("No frames captured.")
+            return None
+
+        avg_frame = np.mean(frames, axis=0).astype(np.uint8)
 
         return avg_frame
 
@@ -1865,6 +1983,29 @@ class App:
         cam.put_Contrast(0)
         cam.put_Gamma(100)
         cam.put_Saturation(128)
+
+    def change_resolution(self, index):        
+        self.disable_buttons()
+        self.hcam.Close()
+
+        cams = amcam.Amcam.EnumV2()
+        self.hcam = amcam.Amcam.Open(cams[0].id)
+
+        self.hcam.put_eSize(index)
+
+        self.width, self.height = self.hcam.get_Size()
+
+        bufsize = ((self.width * 24 + 31) // 32 * 4) * self.height
+        self.buf = ctypes.create_string_buffer(bufsize)
+
+        self.hcam.StartPullModeWithCallback(self.cameraCallback, self)
+
+        num_res = self.hcam.ResolutionNumber()
+        for i in range(num_res):
+            print(f"Resolution {i}: {self.hcam.get_Resolution(i)}")
+        print(f"Current Resolution: ({self.width}, {self.height})")
+
+        self.enable_buttons()
 
     def on_close(self):
         self.hcam = None
