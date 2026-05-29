@@ -24,7 +24,7 @@ def on_close():
     root.destroy()
 
     python_exe = Path(sys.executable)
-    #script = scanner_path
+    script = scanner_path
     script = mapper_path
 
     cmd = [str(python_exe), str(script), str(prior_args_final), str(olympius_args_final)]

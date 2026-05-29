@@ -1,3 +1,4 @@
+from itertools import count
 import os
 import sys
 import re
@@ -116,7 +117,7 @@ class App:
         self.hold_job = None
         self.is_hold = False
 
-        self.frame_buffer = deque(maxlen=1)
+        self.frame_buffer = deque(maxlen=5)
         self.hcam = None
         self.buf = None
         self.prevImg = None
@@ -186,8 +187,6 @@ class App:
         self.root.bind_all("<Button-1>", self.clear_focus, add="+")
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-
-        self.process_frame()
 
     # ------------- Initialization -------------
 
@@ -1314,7 +1313,12 @@ class App:
         dx_um = cur_X - self.stage_center_x
         dy_um = cur_Y - self.stage_center_y
 
-        pixels_per_um = (1.0 / PIXEL_SIZE_2X_HIGH) / zoom
+        if self.resolution == 0:
+            pixels_per_um = (1.0 / PIXEL_SIZE_2X_HIGH) / zoom
+        elif self.resolution == 1:
+            pixels_per_um = (1.0 / PIXEL_SIZE_2X_MED) / zoom
+        else:
+            pixels_per_um = (1.0 / PIXEL_SIZE_2X_LOW) / zoom
 
         dx_px = - int(dx_um * pixels_per_um)
         dy_px = - int(dy_um * pixels_per_um)
@@ -1783,6 +1787,8 @@ class App:
 
             self.frame_id += 1
 
+            self.process_frame()
+
         except amcam.HRESULTException as ex:
             print("Camera error:", ex)
 
@@ -1799,7 +1805,7 @@ class App:
 
             if self.live_mapping_var.get():
                 self.place_live_frame_on_map(self.crop_frame(img), data["x"], data["y"], zoom=4)
-            if self.view_mode == "Camera View":
+            elif self.view_mode == "Camera View":
                 if self.filter_var.get():
                     display = cv2.cvtColor(chip_edge_classifier.chip_filter(img), cv2.COLOR_GRAY2RGB)
                 else:
@@ -1811,7 +1817,7 @@ class App:
         except Exception as ex:
             print("Frame processing error:", ex)
 
-        self.root.after(10, self.process_frame)
+        #self.root.after(20, self.process_frame)
 
     def run_camera(self):
         cams = amcam.Amcam.EnumV2()
@@ -1828,6 +1834,7 @@ class App:
         #self.reset_camera_settings(self.hcam)
 
         self.hcam.put_eSize(0)
+        self.resolution = 0
         
         self.width, self.height = self.hcam.get_Size()
         bufsize = ((self.width * 24 + 31) // 32 * 4) * self.height
@@ -1886,26 +1893,29 @@ class App:
 
     def capture_frame(self, num_images=2):
 
-        frames = []
+        sum_frame = np.zeros_like(data["frame"], dtype=np.float32)
 
+        count = 0
         start_time = time.time()
 
-        while len(frames) < num_images:
+        while count < num_images:
             try:
                 data = self.frame_buffer[-1]
                 if data["stage_busy"]:
+                    time.sleep(0.05)
                     continue
                 if data["timestamp"] < start_time:
                     continue
-                frames.append(data["frame"].astype(np.float32))
+                sum_frame += data["frame"].astype(np.float32)
+                count += 1
             except Exception:
                 print("Frame timeout")
                 break
 
-        if not frames:
+        if count == 0:
             return None
 
-        avg_frame = np.mean(frames, axis=0).astype(np.uint8)
+        avg_frame = (sum_frame / count).astype(np.uint8)
 
         avg_frame = self.crop_frame(avg_frame)
 
@@ -1934,27 +1944,30 @@ class App:
 
     def capture_frame_raw(self, num_images=2):
 
-        frames = []
-        
+        sum_frame = np.zeros_like(data["frame"], dtype=np.float32)
+
+        count = 0
         start_time = time.time()
 
-        while len(frames) < num_images:
+        while count < num_images:
             try:
                 data = self.frame_buffer[-1]
                 if data["stage_busy"]:
+                    time.sleep(0.05)
                     continue
                 if data["timestamp"] < start_time:
                     continue
-                frames.append(data["frame"].astype(np.float32))
+                sum_frame += data["frame"].astype(np.float32)
+                count += 1
             except Exception:
                 print("Frame timeout")
                 break
 
-        if not frames:
+        if count == 0:
             print("No frames captured.")
             return None
 
-        avg_frame = np.mean(frames, axis=0).astype(np.uint8)
+        avg_frame = (sum_frame / count).astype(np.uint8)
 
         return avg_frame
 
@@ -1984,7 +1997,10 @@ class App:
         cam.put_Gamma(100)
         cam.put_Saturation(128)
 
-    def change_resolution(self, index):        
+    def change_resolution(self, index): 
+        
+        self.resolution = index
+
         self.disable_buttons()
         self.hcam.Close()
 

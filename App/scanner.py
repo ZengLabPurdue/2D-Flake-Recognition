@@ -1,3 +1,4 @@
+from collections import deque
 import os
 import sys
 import re
@@ -2027,6 +2028,8 @@ class App:
             img = cv2.flip(img, -1)
             self.current_frame = img.copy()
             self.frame_id += 1
+
+            self.frame_buffer.append(self.current_frame)
     
             if self.view_mode == "Map": return
             
@@ -2049,7 +2052,9 @@ class App:
 
         self.hcam = amcam.Amcam.Open(cams[0].id)
 
-        self.hcam.put_eSize(1)
+        self.hcam.put_eSize(0)
+
+        self.frame_buffer = deque(maxlen=5)
 
         self.hcam.put_AutoExpoEnable(True)
         self.hcam.put_AutoExpoTarget(DEFAULT_EXPOSURE)
