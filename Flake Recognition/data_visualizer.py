@@ -1,4 +1,5 @@
 import math
+import os
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
@@ -8,7 +9,7 @@ from tkinter import filedialog
 
 class DataVisualizer():
 
-    def surface_graphing(image1, image2=None, color1="C0", color2="C1", downsample=10):
+    def surface_graphing(image1, image2=None, color1="C0", color2="C1", downsample=10, line_point=None, line_color="red"):
         Z1 = image1.squeeze()
 
         Z1_small = Z1[::downsample, ::downsample]
@@ -18,17 +19,29 @@ class DataVisualizer():
         X, Y = np.meshgrid(x, y)
 
         fig = plt.figure(figsize=(12, 8))
-        ax = fig.add_subplot(111, projection='3d')
+        ax = fig.add_subplot(111, projection="3d")
 
-        ax.plot_surface(X, Y, Z1_small, color=color1, alpha=0.6, linewidth=0, antialiased=False)
+        ax.plot_surface(X, Y, Z1_small, color=color1, antialiased=False)
+
+        z_min = np.min(Z1_small)
+        z_max = np.max(Z1_small)
 
         if image2 is not None:
             Z2 = image2.squeeze()
             Z2_small = Z2[::downsample, ::downsample]
-            ax.plot_surface(X, Y, Z1_small, color=color1, alpha=0.6, linewidth=0, antialiased=False)
+
             ax.plot_surface(X, Y, Z2_small, color=color2, alpha=0.6, linewidth=0, antialiased=False)
-        else:
-            ax.plot_surface(X, Y, Z1_small, color=color1, linewidth=0, antialiased=False)
+
+            z_min = min(z_min, np.min(Z2_small))
+            z_max = max(z_max, np.max(Z2_small))
+
+        if line_point is not None:
+            x_point, y_point = line_point
+
+            x_line = x_point / downsample
+            y_line = y_point / downsample
+
+            ax.plot([x_line, x_line], [y_line, y_line], [z_min, z_max], color=line_color, linewidth=3)
 
         ax.set_xlabel("X")
         ax.set_ylabel("Y")
@@ -200,14 +213,48 @@ class DataVisualizer():
         plt.show()
 
 if __name__ == "__main__":
-    image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
-    
+    image_path = filedialog.askopenfilename(
+        filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")]
+    )
+
     img = cv2.imread(image_path)
 
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    v = hsv[:, :, 2]
+    if img is None:
+        print("No image loaded.")
+        exit()
 
-    b = img[:, :, 0]
-    g = img[:, :, 1]    
-    
+    img_float = img.astype(np.float32)
+
+    b, g, r = cv2.split(img_float)
+
+    sigma = 5
+
+    b_blur = cv2.GaussianBlur(b, (0, 0), sigmaX=sigma, sigmaY=sigma)
+    g_blur = cv2.GaussianBlur(g, (0, 0), sigmaX=sigma, sigmaY=sigma)
+    r_blur = cv2.GaussianBlur(r, (0, 0), sigmaX=sigma, sigmaY=sigma)
+
+    vignette_field_bgr = cv2.merge([b_blur, g_blur, r_blur])
+
+    vignette_display = np.clip(vignette_field_bgr, 0, 255).astype(np.uint8)
+
+    vignette_display_gray = cv2.cvtColor(vignette_display, cv2.COLOR_BGR2GRAY)
+
+    DataVisualizer.surface_graphing(vignette_display_gray)
+
+    '''
     DataVisualizer.surface_graphing(g)
+    DataVisualizer.surface_graphing(g_blur)
+
+    plt.figure(figsize=(8, 6))
+    plt.title("Channel-wise Gaussian Smoothed Vignetting Field")
+    plt.imshow(cv2.cvtColor(vignette_display, cv2.COLOR_BGR2RGB))
+    plt.axis("off")
+    plt.show()
+
+    folder_path = os.path.dirname(image_path)
+    save_path = os.path.join(folder_path, "flatfield_2x_med_smoothed.png")
+
+    cv2.imwrite(save_path, vignette_display)
+
+    print(f"Saved vignette image to: {save_path}")
+    '''

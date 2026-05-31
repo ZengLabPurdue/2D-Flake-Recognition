@@ -1,3 +1,5 @@
+import os
+
 import cv2
 import numpy as np
 from tkinter import filedialog
@@ -5,42 +7,85 @@ from data_visualizer import DataVisualizer
 import Util
 import matplotlib.pyplot as plt
 
-image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
-flatfield_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
-
-def vignetting_correction_direct_single_channel(image, flatfield): # bgr
+def vignetting_correction_direct_single_channel(image, flatfield, reference_point=None, reference_radius=5):
 
     if image.shape != flatfield.shape:
         raise ValueError("Image and flat-field must have the same dimensions")
-    
-    flatfield_blur = cv2.GaussianBlur(flatfield, (5, 5), 1.4)
+
+    image_float = image.astype(np.float32)
+    flatfield_float = flatfield.astype(np.float32)
+
+    flatfield_gray = cv2.cvtColor(flatfield_float.astype(np.uint8), cv2.COLOR_BGR2GRAY).astype(np.float32)
 
     epsilon = 1e-6
-    
-    flatfield_gray = cv2.cvtColor(flatfield_blur.astype(np.uint8), cv2.COLOR_BGR2GRAY).astype(np.float32)
 
-    corrected = image / (flatfield_gray[:, :, np.newaxis] + epsilon)
+    corrected = image_float / (flatfield_gray[:, :, np.newaxis] + epsilon)
 
-    corrected = corrected / np.mean(corrected) * np.mean(image)
+    if reference_point is not None:
+        x_ref, y_ref = reference_point
+        h, w = image.shape[:2]
+
+        x1 = max(0, x_ref - reference_radius)
+        x2 = min(w, x_ref + reference_radius + 1)
+        y1 = max(0, y_ref - reference_radius)
+        y2 = min(h, y_ref + reference_radius + 1)
+
+        image_ref = image_float[y1:y2, x1:x2]
+        corrected_ref = corrected[y1:y2, x1:x2]
+
+        ref_orig = np.mean(image_ref, axis=(0, 1))
+        ref_corr = np.mean(corrected_ref, axis=(0, 1))
+
+        scale = ref_orig / (ref_corr + epsilon)
+
+    else:
+        mean_orig = np.mean(image_float, axis=(0, 1))
+        mean_corr = np.mean(corrected, axis=(0, 1))
+
+        scale = mean_orig / (mean_corr + epsilon)
+
+    corrected *= scale
 
     corrected = np.clip(corrected, 0, 255).astype(np.uint8)
-    return cv2.cvtColor(corrected, cv2.COLOR_BGR2RGB)
 
-def vignetting_correction_direct_multi_channel(image, flatfield):
+    corrected_rgb = cv2.cvtColor(corrected, cv2.COLOR_BGR2RGB)
+
+    return corrected_rgb
+
+def vignetting_correction_direct_multi_channel(image, flatfield, reference_point=None, reference_radius=5):
 
     if image.shape != flatfield.shape:
         raise ValueError("Image and flat-field must have the same dimensions")
 
-    flatfield_blur = cv2.GaussianBlur(flatfield, (5, 5), 1.4)
+    image_float = image.astype(np.float32)
+    flatfield_float = flatfield.astype(np.float32)
 
     epsilon = 1e-6
 
-    corrected = image / (flatfield_blur + epsilon)
+    corrected = image_float / (flatfield_float + epsilon)
 
-    mean_orig = np.mean(image, axis=(0, 1))
-    mean_corr = np.mean(corrected, axis=(0, 1))
+    if reference_point is not None:
+        x_ref, y_ref = reference_point
+        h, w = image.shape[:2]
 
-    scale = mean_orig / (mean_corr + epsilon)
+        x1 = max(0, x_ref - reference_radius)
+        x2 = min(w, x_ref + reference_radius + 1)
+        y1 = max(0, y_ref - reference_radius)
+        y2 = min(h, y_ref + reference_radius + 1)
+
+        image_ref = image_float[y1:y2, x1:x2]
+        corrected_ref = corrected[y1:y2, x1:x2]
+
+        ref_orig = np.mean(image_ref, axis=(0, 1))
+        ref_corr = np.mean(corrected_ref, axis=(0, 1))
+
+        scale = ref_orig / (ref_corr + epsilon)
+    else:
+        mean_orig = np.mean(image, axis=(0, 1))
+        mean_corr = np.mean(corrected, axis=(0, 1))
+
+        scale = mean_orig / (mean_corr + epsilon)
+
 
     corrected *= scale
 
@@ -127,6 +172,51 @@ def vignetting_correction_poly_max(image_path, flatfield_path, degree=2):
     corrected = np.clip(corrected, 0, 255).astype(np.uint8)
     return cv2.cvtColor(corrected, cv2.COLOR_BGR2RGB)
 
+def average_images_in_folder(folder_path):
+    valid_exts = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
+
+    image_paths = [
+        os.path.join(folder_path, f)
+        for f in os.listdir(folder_path)
+        if f.lower().endswith(valid_exts)
+    ]
+
+    if len(image_paths) == 0:
+        print("No image files found in folder.")
+        return None
+
+    sum_img = None
+    count = 0
+    reference_shape = None
+
+    for path in image_paths:
+        img = cv2.imread(path)
+
+        if img is None:
+            print(f"Skipping unreadable file: {path}")
+            continue
+
+        if reference_shape is None:
+            reference_shape = img.shape
+            sum_img = np.zeros_like(img, dtype=np.float64)
+
+        if img.shape != reference_shape:
+            print(f"Skipping different-sized image: {path}")
+            continue
+
+        sum_img += img.astype(np.float64)
+        count += 1
+
+    if count == 0:
+        print("No valid images averaged.")
+        return None
+
+    avg_img = sum_img / count
+    avg_img = np.clip(avg_img, 0, 255).astype(np.uint8)
+
+    print(f"Averaged {count} images.")
+    return avg_img
+
 if __name__ == "__main__":
     image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
     flatfield_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
@@ -134,7 +224,7 @@ if __name__ == "__main__":
     image = cv2.imread(image_path)
     flatfield= cv2.imread(flatfield_path)
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    corrected_image = vignetting_correction_poly_all_channels(image, flatfield, degree=2)
+    corrected_image = vignetting_correction_direct_single_channel(image, flatfield, reference_point=(image.shape[1]//2, image.shape[0]//2))
 
     plt.figure(figsize=(10, 5))
 

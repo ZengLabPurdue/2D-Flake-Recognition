@@ -64,12 +64,10 @@ RELATIVE_100X_Z = 4300
 X_SIZE_2 = 10642
 Y_SIZE_2 = 7027
 
-PIXEL_SIZE_2X_HIGH = 1.92864 # um
-PIXEL_SIZE_2X_MED = 3.87297 # um
-PIXEL_SIZE_2X_LOW = 5.81395 # um
+IMAGE_UM_PER_PIXEL_2X_HIGH = 1.92864 # um
+IMAGE_UM_PER_PIXEL_2X_MED = 3.87297 # um
+IMAGE_UM_PER_PIXEL_2X_LOW = 5.81395 # um
 
-X_SIZE_10 = 2142 
-Y_SIZE_10 = 1359
 
 MAGNIFICATION = 2
 
@@ -114,6 +112,9 @@ class App:
         self.xy_speed = 2600
         self.z_step_size = 500
         self.z_speed = 500
+
+        self.was_busy = False
+        self.capture_after_move = True
         self.hold_job = None
         self.is_hold = False
 
@@ -125,6 +126,10 @@ class App:
         self.height = 0
         
         self.magnification = "2x"
+
+        self.last_live_frame_rgb = None
+        self.last_live_map_x = None
+        self.last_live_map_y = None
 
         self.auto_focus_range = 1000
         self.auto_focus_accuracy = 10
@@ -188,6 +193,8 @@ class App:
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
+        self.process_frame()
+
     # ------------- Initialization -------------
 
     def init_menu_bar(self):
@@ -225,6 +232,7 @@ class App:
         map_menu = Menu(menu_bar, tearoff=0)
         map_menu.add_radiobutton(label="Live Map 2x", variable=self.live_mapping_var, value=True, command=lambda: self.set_live_map_2x(True))
         map_menu.add_command(label="Auto Map 2x", command=self.auto_map_2x)
+        map_menu.add_command(label="Capture Area", command=self.capture_area)
         menu_bar.add_cascade(label="Map", menu=map_menu)
 
         root.config(menu=menu_bar)
@@ -1292,42 +1300,67 @@ class App:
         self.map_center_x = self.true_map.shape[1] // 2
         self.map_center_y = self.true_map.shape[0] // 2
 
+        print(f"Stage Center: ({self.stage_center_x:.1f}, {self.stage_center_y:.1f}) | Map Center: ({self.map_center_x}, {self.map_center_y})")
+
     def place_live_frame_on_map(self, img, cur_X, cur_Y, zoom):
 
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
         step = max(1, int(round(zoom)))
-
         img_rgb = img_rgb[::step, ::step]
 
         h, w = img_rgb.shape[:2]
 
         self.get_position()
 
-        if self.prev_x == cur_X and self.prev_y == cur_Y:
-            return
-
-        self.prev_x = cur_X
-        self.prev_y = cur_Y
-
         dx_um = cur_X - self.stage_center_x
         dy_um = cur_Y - self.stage_center_y
 
         if self.resolution == 0:
-            pixels_per_um = (1.0 / PIXEL_SIZE_2X_HIGH) / zoom
+            map_pixels_per_um = 1 / IMAGE_UM_PER_PIXEL_2X_HIGH / zoom
         elif self.resolution == 1:
-            pixels_per_um = (1.0 / PIXEL_SIZE_2X_MED) / zoom
+            map_pixels_per_um = 1 / IMAGE_UM_PER_PIXEL_2X_MED / zoom
         else:
-            pixels_per_um = (1.0 / PIXEL_SIZE_2X_LOW) / zoom
+            map_pixels_per_um = 1 / IMAGE_UM_PER_PIXEL_2X_LOW / zoom
 
-        dx_px = - int(dx_um * pixels_per_um)
-        dy_px = - int(dy_um * pixels_per_um)
+        dx_px = -int(dx_um * map_pixels_per_um)
+        dy_px = -int(dy_um * map_pixels_per_um)
 
         map_x = self.map_center_x + dx_px
         map_y = self.map_center_y + dy_px
 
-        print(f"Stage Pos: ({cur_X:.1f} µm, {cur_Y:.1f} µm) | Map Pos: ({map_x}, {map_y})")
+        MIN_ECC_SCORE = 0.10
 
+        if self.last_live_frame_rgb is not None:
+        
+            try:
+                last_frame = self.last_live_frame_rgb
+
+                # Make sure last frame and current frame are same size
+                h_common = min(last_frame.shape[0], img_rgb.shape[0])
+                w_common = min(last_frame.shape[1], img_rgb.shape[1])
+
+                last_crop = last_frame[:h_common, :w_common]
+                cur_crop = img_rgb[:h_common, :w_common]
+
+                shift_x, shift_y, score = self.ecc_shift_correction(last_crop, cur_crop)
+
+                print(f"ECC Relative Shift: ({shift_x:.2f}, {shift_y:.2f}) | Score={score:.3f}")
+
+                self.save_ecc_comparison(last_crop, cur_crop, score=score, shift_x=shift_x, shift_y=shift_y)
+
+                if score > MIN_ECC_SCORE:
+                    map_x = self.last_live_map_x + int(round(shift_x))
+                    map_y = self.last_live_map_y + int(round(shift_y))
+                else:
+                    print("ECC score too low, using stage-based map position")
+
+            except Exception as ex:
+                print("ECC correction failed:", ex)
+
+        else:
+            print("Skipping ECC: no previous live frame yet")
+            
         x_start = int(map_x - w // 2)
         y_start = int(map_y - h // 2)
 
@@ -1354,10 +1387,97 @@ class App:
         existing = self.true_map[y0:y1, x0:x1]
 
         blended = cv2.addWeighted(existing, 0.5, crop, 0.5, 0)
+        
+        self.true_map[y0:y1, x0:x1] = crop
 
-        self.true_map[y0:y1, x0:x1] = blended
+        self.last_live_frame_rgb = img_rgb.copy()
+        self.last_live_map_x = map_x
+        self.last_live_map_y = map_y
 
         self.display_map()
+
+    def ecc_shift_correction(self, existing, incoming):
+
+        existing_gray = cv2.cvtColor(existing, cv2.COLOR_RGB2GRAY)
+        incoming_gray = cv2.cvtColor(incoming, cv2.COLOR_RGB2GRAY)
+
+        existing_bg = cv2.GaussianBlur(existing_gray, (0, 0), 35)
+        incoming_bg = cv2.GaussianBlur(incoming_gray, (0, 0), 35)
+
+        existing_flat = cv2.divide(existing_gray, existing_bg, scale=255)
+        incoming_flat = cv2.divide(incoming_gray, incoming_bg, scale=255)
+
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
+        existing_flat = clahe.apply(existing_flat)
+        incoming_flat = clahe.apply(incoming_flat)
+
+        existing_flat = cv2.GaussianBlur(existing_flat, (5, 5), 0)
+        incoming_flat = cv2.GaussianBlur(incoming_flat, (5, 5), 0)
+
+        existing_float = np.float32(existing_flat) / 255.0
+        incoming_float = np.float32(incoming_flat) / 255.0
+
+        warp = np.eye(2, 3, dtype=np.float32)
+
+        criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 100, 1e-5)
+
+        score, warp = cv2.findTransformECC(existing_float, incoming_float, warp, cv2.MOTION_TRANSLATION, criteria)
+
+        dx = warp[0, 2]
+        dy = warp[1, 2]
+
+        return dx, dy, score
+
+    def save_ecc_comparison(self, existing_crop, img_rgb, score=None, shift_x=None, shift_y=None, save_dir=None, filename=None):
+        # Inputs are RGB, save_image expects BGR
+        existing_bgr = cv2.cvtColor(existing_crop, cv2.COLOR_RGB2BGR)
+        live_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+
+        # Force same size
+        h = min(existing_bgr.shape[0], live_bgr.shape[0])
+        w = min(existing_bgr.shape[1], live_bgr.shape[1])
+
+        existing_bgr = existing_bgr[:h, :w]
+        live_bgr = live_bgr[:h, :w]
+
+        if shift_x is not None and shift_y is not None:
+            warp = np.array([[1, 0, shift_x], [0, 1, shift_y]],dtype=np.float32)
+
+            aligned_live_bgr = cv2.warpAffine(live_bgr, warp, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+
+            overlay = cv2.addWeighted(existing_bgr, 0.5, aligned_live_bgr, 0.5, 0)
+
+        label_height = 90
+
+        def add_label(img, title, extra_lines=None):
+            labeled = cv2.copyMakeBorder( img, label_height, 0, 0, 0, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+
+            cv2.putText(labeled, title, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA)
+
+            if extra_lines:
+                y = 58
+                for line in extra_lines:
+                    cv2.putText(labeled, line, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+                    y += 24
+
+            return labeled
+
+        score_text = "Score: N/A" if score is None else f"Score: {score:.3f}"
+        shift_text = "Shift: N/A" if shift_x is None or shift_y is None else f"Shift: dx={shift_x:.2f}, dy={shift_y:.2f}"
+
+        existing_labeled = add_label(existing_bgr, "Existing Map Crop")
+
+        live_labeled = add_label(live_bgr, "Live Frame")
+
+        overlay_labeled = add_label(overlay, "Overlay: Existing + Live", [score_text, shift_text])
+
+        comparison = np.hstack((existing_labeled, live_labeled, overlay_labeled))
+
+        if filename is None:
+            filename = f"ecc_compare_{int(time.time() * 1000)}.png"
+
+        self.save_image(image=comparison, save_dir=save_dir, filename=filename, output=False)
 
     def auto_map_2x(self, window=(3, 3), zoom=4):
 
@@ -1451,6 +1571,46 @@ class App:
 
             if self.view_mode == "Camera View":
                 self.display_image(img_rgb)
+
+            i += 1
+
+            progress_percent = f"{i}/{total_frames}"
+
+            self.update_scan_status(
+                scan_type="Live Mapping",
+                stage="Mapping",
+                progress=progress_percent
+            )
+
+        self.scan_running = False
+
+        print("Live mapping finished!")
+
+    def capture_area(self, window=(5, 5), zoom=4):
+
+        self.open_panel("Info Panel")
+
+        self.change_objective(1)
+
+        self.scan_running = True
+
+        coords, total_frames = self.generate_rect_coords(window[1], window[0])
+
+        i = 0
+
+        print(coords)
+
+        for offset_x, offset_y in coords:
+
+            target_x = offset_x * 300
+            target_y = -offset_y * 300
+
+            pc.go_to_pos(target_x, target_y)
+            pc.wait_until_not_busy()
+
+            img = self.capture_frame_raw()
+
+            self.save_image(image=img, filename=f"flatfield_2x_low_{i}.png")
 
             i += 1
 
@@ -1787,8 +1947,6 @@ class App:
 
             self.frame_id += 1
 
-            self.process_frame()
-
         except amcam.HRESULTException as ex:
             print("Camera error:", ex)
 
@@ -1804,7 +1962,19 @@ class App:
             self.find_sharpness(self.current_frame)
 
             if self.live_mapping_var.get():
-                self.place_live_frame_on_map(self.crop_frame(img), data["x"], data["y"], zoom=4)
+                busy = pc.is_busy()     
+                if self.was_busy and not busy:
+                    self.capture_after_move = True
+
+                self.was_busy = busy
+
+                if busy:
+                    return
+                
+                if self.capture_after_move:
+                    self.capture_after_move = False
+                    self.place_live_frame_on_map(self.crop_frame(img), data["x"], data["y"], zoom=4)
+
             elif self.view_mode == "Camera View":
                 if self.filter_var.get():
                     display = cv2.cvtColor(chip_edge_classifier.chip_filter(img), cv2.COLOR_GRAY2RGB)
@@ -1817,7 +1987,7 @@ class App:
         except Exception as ex:
             print("Frame processing error:", ex)
 
-        #self.root.after(20, self.process_frame)
+        self.root.after(20, self.process_frame)
 
     def run_camera(self):
         cams = amcam.Amcam.EnumV2()
@@ -1833,8 +2003,8 @@ class App:
         '''
         #self.reset_camera_settings(self.hcam)
 
-        self.hcam.put_eSize(0)
-        self.resolution = 0
+        self.hcam.put_eSize(1)
+        self.resolution = self.hcam.get_eSize()
         
         self.width, self.height = self.hcam.get_Size()
         bufsize = ((self.width * 24 + 31) // 32 * 4) * self.height
@@ -1868,15 +2038,15 @@ class App:
     # image should be in BGR
     def save_image(self, image=None, save_dir=None, filename=None, output=True):
         if image is None:
-            image = self.frame_buffer[-1]["frame"].copy()
+            image = self.capture_frame_raw()
 
         if save_dir is None:
             save_dir = home_dir / "Saved Images"
         else:
             save_dir = Path(save_dir)
 
-        cv2.imshow("Saved Image", image)
-        cv2.waitKey(1)
+        #cv2.imshow("Saved Image", image)
+        #cv2.waitKey(1)
 
         save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1893,7 +2063,7 @@ class App:
 
     def capture_frame(self, num_images=2):
 
-        sum_frame = np.zeros_like(data["frame"], dtype=np.float32)
+        sum_frame = np.zeros_like(self.frame_buffer[-1]["frame"], dtype=np.float32)
 
         count = 0
         start_time = time.time()
@@ -1942,20 +2112,24 @@ class App:
 
         return frame[y1:y2, x1:x2]
 
-    def capture_frame_raw(self, num_images=2):
+    def capture_frame_raw(self, num_images=100):
 
-        sum_frame = np.zeros_like(data["frame"], dtype=np.float32)
+        sum_frame = np.zeros_like(self.frame_buffer[-1]["frame"], dtype=np.float32)
 
         count = 0
         start_time = time.time()
 
         while count < num_images:
+            print(f"Capturing frame {count+1}/{num_images}...")
             try:
                 data = self.frame_buffer[-1]
                 if data["stage_busy"]:
                     time.sleep(0.05)
+                    print("Stage is busy, waiting...")
                     continue
                 if data["timestamp"] < start_time:
+                    print(f"Start time {start_time} is later than frame time {data['timestamp']}, waiting for new frame...")
+                    time.sleep(0.05)
                     continue
                 sum_frame += data["frame"].astype(np.float32)
                 count += 1

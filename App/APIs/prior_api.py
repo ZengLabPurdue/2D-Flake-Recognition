@@ -87,6 +87,7 @@ class Prior_Controller():
     def wait_until_not_busy(self):
         start_time = time.time()
         while self.is_busy():
+            time.sleep(0.05)
             pass
         end_time = time.time() - start_time
         return end_time
@@ -108,36 +109,32 @@ class Prior_Controller():
         return stage_busy != "0" or z_busy != "0"
 
     def set_velocity(self, velocity):
-        self.wait_until_not_busy()
         self.velocity = velocity
         self.cmd(f"controller.stage.speed.set {self.velocity}")
         self.cmd("controller.stage.speed.get")
 
     def get_velocity(self):
-        self.wait_until_not_busy()
         velocity = self.cmd("controller.stage.speed.get")[1]
         self.velocity = int(float(velocity))
         return self.velocity
 
     def set_acceleration(self, acceleration):
-        self.wait_until_not_busy()
         self.acceleration = acceleration
         self.cmd(f"controller.stage.acc.set {self.acceleration}")
         self.cmd("controller.stage.acc.get")
 
     def go_to_pos(self, new_x, new_y):
+        if self.is_busy():
+            return False
         self.x = new_x
         self.y = new_y
         #print(f"Going to ({new_x}, {new_y})")
-        self.wait_until_not_busy()
         self.cmd(f"controller.stage.goto-position {self.x} {self.y}")
-        self.wait_until_not_busy()
         self.cmd("controller.stage.speed.get")
         self.get_curr_pos()
         # time.sleep(1)
 
     def get_curr_pos(self):
-        self.wait_until_not_busy()
         position = self.cmd("controller.stage.position.get")
         try:
             self.x = int(position[1].split(",")[0])
@@ -150,33 +147,28 @@ class Prior_Controller():
 
     def set_z_velocity(self, velocity):
         self.z_velocity = velocity
-        self.wait_until_not_busy()
         self.cmd(f"controller.z.speed.set {self.velocity}")
-        self.wait_until_not_busy()
         self.cmd("controller.z.speed.get")
 
     def get_z_velocity(self):
-        self.wait_until_not_busy()
         velocity = self.cmd("controller.z.speed.get")[1]
         self.z_velocity = int(float(velocity))
         return self.z_velocity
 
     def set_z_acceleration(self, acceleration):
-        self.wait_until_not_busy()
         self.z_acceleration = acceleration
         self.cmd(f"controller.z.acc.set {self.acceleration}")
         self.cmd("controller.z.acc.get")
 
     def go_to_z_pos(self, new_z):
+        if self.is_busy():
+            return False
         self.z = new_z * 10
-        self.wait_until_not_busy()
         self.cmd(f"controller.z.goto-position {self.z}")
-        self.wait_until_not_busy()
         self.get_curr_z_pos()
         # time.sleep(1)
 
     def get_curr_z_pos(self):
-        self.wait_until_not_busy()
         position = self.cmd("controller.z.position.get")
         self.z = int(position[1]) / 10
         return self.z
