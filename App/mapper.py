@@ -31,10 +31,12 @@ api_path = home_dir / "APIs"
 
 sys.path.insert(0, str(parent_dir))
 sys.path.insert(0, str(api_path))
+sys.path.insert(0, str(parent_dir / "Flake Recognition"))
 
 import amcam
 from prior_api import Prior_Controller
 from turret_api import Turret_Controller
+import vignetting_corrector
 import chip_edge_classifier
 import flake_identifier
 import flake_identifier_yolo
@@ -68,8 +70,9 @@ IMAGE_UM_PER_PIXEL_2X_HIGH = 1.92864 # um
 IMAGE_UM_PER_PIXEL_2X_MED = 3.87297 # um
 IMAGE_UM_PER_PIXEL_2X_LOW = 5.81395 # um
 
-
 MAGNIFICATION = 2
+
+#FLATFIELD_IMG = cv2.imread(str(home_dir / "Flatfields" / "flatfield_2x_med_smoothed.png"))
 
 try:
     pc = Prior_Controller(PRIOR_COM_PORT, DLL_PATH)
@@ -1288,6 +1291,10 @@ class App:
 
         self.live_mapping_var.set(live)
 
+        self.open_panel("Stage Control Panel")
+
+        self.set_view("Map", False)
+
         if not self.live_mapping_var.get():
             return
 
@@ -1329,34 +1336,51 @@ class App:
         map_x = self.map_center_x + dx_px
         map_y = self.map_center_y + dy_px
 
-        MIN_ECC_SCORE = 0.10
-
         if self.last_live_frame_rgb is not None:
         
             try:
                 last_frame = self.last_live_frame_rgb
 
-                # Make sure last frame and current frame are same size
                 h_common = min(last_frame.shape[0], img_rgb.shape[0])
                 w_common = min(last_frame.shape[1], img_rgb.shape[1])
 
                 last_crop = last_frame[:h_common, :w_common]
                 cur_crop = img_rgb[:h_common, :w_common]
 
-                shift_x, shift_y, score = self.ecc_shift_correction(last_crop, cur_crop)
+                shift_x, shift_y, score, num_matches, num_inliers = self.orb_ransac_shift_correction(
+                    last_crop,
+                    cur_crop
+                )
 
-                print(f"ECC Relative Shift: ({shift_x:.2f}, {shift_y:.2f}) | Score={score:.3f}")
+                print(
+                    f"ORB/RANSAC Relative Shift: ({shift_x:.2f}, {shift_y:.2f}) | "
+                    f"Score={score:.3f} | Matches={num_matches} | Inliers={num_inliers}"
+                )
 
-                self.save_ecc_comparison(last_crop, cur_crop, score=score, shift_x=shift_x, shift_y=shift_y)
+                self.save_ecc_comparison(
+                    last_crop,
+                    cur_crop,
+                    score=score,
+                    shift_x=shift_x,
+                    shift_y=shift_y,
+                    filename=f"orb_compare_{int(time.time() * 1000)}.png"
+                )
 
-                if score > MIN_ECC_SCORE:
-                    map_x = self.last_live_map_x + int(round(shift_x))
-                    map_y = self.last_live_map_y + int(round(shift_y))
+                MIN_ORB_SCORE = 0.25
+                MAX_REASONABLE_SHIFT = 250
+
+                if (
+                    score > MIN_ORB_SCORE
+                    and abs(shift_x) < MAX_REASONABLE_SHIFT
+                    and abs(shift_y) < MAX_REASONABLE_SHIFT
+                ):
+                    map_x = self.last_live_map_x - int(round(shift_x))
+                    map_y = self.last_live_map_y - int(round(shift_y))
                 else:
-                    print("ECC score too low, using stage-based map position")
+                    print("ORB/RANSAC score too low or shift too large, using stage-based map position")
 
-            except Exception as ex:
-                print("ECC correction failed:", ex)
+            except Exception:
+                print("ECC correction failed to converge!")
 
         else:
             print("Skipping ECC: no previous live frame yet")
@@ -1396,45 +1420,92 @@ class App:
 
         self.display_map()
 
-    def ecc_shift_correction(self, existing, incoming):
+    def orb_ransac_shift_correction(self, existing, incoming, max_features=3000, min_matches=12, good_match_percent=0.35, ransac_reproj_threshold=5.0):
 
         existing_gray = cv2.cvtColor(existing, cv2.COLOR_RGB2GRAY)
         incoming_gray = cv2.cvtColor(incoming, cv2.COLOR_RGB2GRAY)
 
-        existing_bg = cv2.GaussianBlur(existing_gray, (0, 0), 35)
-        incoming_bg = cv2.GaussianBlur(incoming_gray, (0, 0), 35)
+        existing_proc = self.preprocess_for_orb(existing_gray)
+        incoming_proc = self.preprocess_for_orb(incoming_gray)
 
-        existing_flat = cv2.divide(existing_gray, existing_bg, scale=255)
-        incoming_flat = cv2.divide(incoming_gray, incoming_bg, scale=255)
+        orb = cv2.ORB_create(
+            nfeatures=max_features,
+            scaleFactor=1.2,
+            nlevels=8,
+            edgeThreshold=15,
+            patchSize=31,
+            fastThreshold=10
+        )
+
+        kp1, des1 = orb.detectAndCompute(existing_proc, None)
+        kp2, des2 = orb.detectAndCompute(incoming_proc, None)
+
+        if des1 is None or des2 is None:
+            print("ORB failed: no descriptors found")
+            return 0.0, 0.0, 0.0, 0, 0
+
+        if len(kp1) < min_matches or len(kp2) < min_matches:
+            print(f"ORB failed: not enough keypoints, kp1={len(kp1)}, kp2={len(kp2)}")
+            return 0.0, 0.0, 0.0, 0, 0
+
+        matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        matches = matcher.match(des1, des2)
+
+        if len(matches) < min_matches:
+            print(f"ORB failed: not enough matches, matches={len(matches)}")
+            return 0.0, 0.0, 0.0, len(matches), 0
+
+        matches = sorted(matches, key=lambda m: m.distance)
+
+        keep_count = max(min_matches, int(len(matches) * good_match_percent))
+        matches = matches[:keep_count]
+
+        pts_existing = np.float32([kp1[m.queryIdx].pt for m in matches])
+        pts_incoming = np.float32([kp2[m.trainIdx].pt for m in matches])
+
+        M, inliers = cv2.estimateAffinePartial2D(
+            pts_incoming,
+            pts_existing,
+            method=cv2.RANSAC,
+            ransacReprojThreshold=ransac_reproj_threshold,
+            maxIters=2000,
+            confidence=0.99
+        )
+
+        if M is None or inliers is None:
+            print("ORB/RANSAC failed: affine transform could not be estimated")
+            return 0.0, 0.0, 0.0, len(matches), 0
+
+        num_inliers = int(inliers.sum())
+        num_matches = len(matches)
+
+        score = num_inliers / max(num_matches, 1)
+
+        dx = float(M[0, 2])
+        dy = float(M[1, 2])
+
+        return dx, dy, score, num_matches, num_inliers
+
+    def preprocess_for_orb(self, gray):
+
+        if gray.dtype != np.uint8:
+            gray = np.clip(gray, 0, 255).astype(np.uint8)
+
+        bg = cv2.GaussianBlur(gray, (0, 0), 35)
+        flat = cv2.divide(gray, bg, scale=255)
 
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        flat = clahe.apply(flat)
 
-        existing_flat = clahe.apply(existing_flat)
-        incoming_flat = clahe.apply(incoming_flat)
+        flat = cv2.GaussianBlur(flat, (3, 3), 0)
 
-        existing_flat = cv2.GaussianBlur(existing_flat, (5, 5), 0)
-        incoming_flat = cv2.GaussianBlur(incoming_flat, (5, 5), 0)
+        return flat
 
-        existing_float = np.float32(existing_flat) / 255.0
-        incoming_float = np.float32(incoming_flat) / 255.0
+    def save_shift_comparison(self, existing_crop, img_rgb, score=None, shift_x=None, shift_y=None, save_dir=None, filename=None):
 
-        warp = np.eye(2, 3, dtype=np.float32)
-
-        criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 100, 1e-5)
-
-        score, warp = cv2.findTransformECC(existing_float, incoming_float, warp, cv2.MOTION_TRANSLATION, criteria)
-
-        dx = warp[0, 2]
-        dy = warp[1, 2]
-
-        return dx, dy, score
-
-    def save_ecc_comparison(self, existing_crop, img_rgb, score=None, shift_x=None, shift_y=None, save_dir=None, filename=None):
-        # Inputs are RGB, save_image expects BGR
         existing_bgr = cv2.cvtColor(existing_crop, cv2.COLOR_RGB2BGR)
         live_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
 
-        # Force same size
         h = min(existing_bgr.shape[0], live_bgr.shape[0])
         w = min(existing_bgr.shape[1], live_bgr.shape[1])
 
@@ -1748,36 +1819,29 @@ class App:
         cx = w // 2
         cy = h // 2
 
+        frame = img_rgb.copy()
+
         if self.view_mode == "Camera View":
             mag = self.magnification
 
-            if mag == "2x":
-                cw = CENTER_CROP_WIDTH_RATIO_2X
-                ch = CENTER_CROP_HEIGHT_RATIO_2X
-            elif mag == "10x":
-                cw = CENTER_CROP_WIDTH_RATIO_10X
-                ch = CENTER_CROP_HEIGHT_RATIO_10X
-            elif mag == "20x":
-                cw = CENTER_CROP_WIDTH_RATIO_20X
-                ch = CENTER_CROP_HEIGHT_RATIO_20X
-            elif mag == "100x":
-                cw = CENTER_CROP_WIDTH_RATIO_100X
-                ch = CENTER_CROP_HEIGHT_RATIO_100X
-            else:
-                cw = ch = 1.0
+            crop_ratios = {
+                "2x":   (CENTER_CROP_WIDTH_RATIO_2X,   CENTER_CROP_HEIGHT_RATIO_2X),
+                "10x":  (CENTER_CROP_WIDTH_RATIO_10X,  CENTER_CROP_HEIGHT_RATIO_10X),
+                "20x":  (CENTER_CROP_WIDTH_RATIO_20X,  CENTER_CROP_HEIGHT_RATIO_20X),
+                "100x": (CENTER_CROP_WIDTH_RATIO_100X, CENTER_CROP_HEIGHT_RATIO_100X),
+            }
+
+            cw, ch = crop_ratios.get(mag, (1.0, 1.0))
 
             crop_w = int(w * cw)
             crop_h = int(h * ch)
 
-            x1 = cx - (crop_w >> 1)
-            y1 = cy - (crop_h >> 1)
-            x2 = x1 + crop_w
-            y2 = y1 + crop_h
+            x1 = max(0, cx - crop_w // 2)
+            y1 = max(0, cy - crop_h // 2)
+            x2 = min(w - 1, cx + crop_w // 2)
+            y2 = min(h - 1, cy + crop_h // 2)
 
-            frame = img_rgb.copy()
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
-        else:
-            frame = img_rgb
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 5)
 
         cv2.circle(frame, (cx, cy), 2, (255, 0, 0), -1)
 
@@ -1788,12 +1852,19 @@ class App:
         if lbl_w < 10 or lbl_h < 10:
             return
 
-        img = Image.fromarray(frame)
+        img_pil = Image.fromarray(frame)
 
-        img = img.resize((lbl_w, lbl_h), Image.Resampling.BILINEAR)
+        img_pil.thumbnail((lbl_w, lbl_h), Image.Resampling.LANCZOS)
 
+        display_img = Image.new("RGB", (lbl_w, lbl_h), "#f0f0f0")
 
-        tk_img = ImageTk.PhotoImage(img)
+        x_offset = (lbl_w - img_pil.width) // 2
+        y_offset = (lbl_h - img_pil.height) // 2
+
+        display_img.paste(img_pil, (x_offset, y_offset))
+
+        tk_img = ImageTk.PhotoImage(display_img)
+
         lbl.configure(image=tk_img)
         lbl.image = tk_img
 
@@ -1933,6 +2004,7 @@ class App:
             img = np.frombuffer(self.buf, dtype=np.uint8).reshape(self.height, row_bytes)
             img = img[:, :self.width * 3].reshape(self.height, self.width, 3)
             img = cv2.flip(img, -1)
+            #img = vignetting_corrector.vignetting_correction_direct_single_channel(img, FLATFIELD_IMG, reference_point=(img.shape[1]//2, img.shape[0]//2))
 
             frame_data = {
                 "frame": img,
@@ -1947,6 +2019,8 @@ class App:
 
             self.frame_id += 1
 
+            #self.process_frame()
+
         except amcam.HRESULTException as ex:
             print("Camera error:", ex)
 
@@ -1957,9 +2031,6 @@ class App:
                 return
             data = self.frame_buffer[-1]
             img = data["frame"]
-            self.current_frame = img
-
-            self.find_sharpness(self.current_frame)
 
             if self.live_mapping_var.get():
                 busy = pc.is_busy()     
@@ -2001,7 +2072,7 @@ class App:
         self.hcam.put_AutoExpoEnable(True)
         self.hcam.put_AutoExpoTarget(DEFAULT_EXPOSURE)
         '''
-        #self.reset_camera_settings(self.hcam)
+        self.reset_camera_settings(self.hcam)
 
         self.hcam.put_eSize(1)
         self.resolution = self.hcam.get_eSize()
@@ -2148,23 +2219,18 @@ class App:
     def reset_camera_settings(self, cam):
         cam.put_AutoExpoEnable(False)
 
-        cam.put_ExpoTime(20000)
+        cam.put_ExpoTime(1500)
         cam.put_ExpoAGain(100)
 
-        cam.put_Option(amcam.AMCAM_OPTION_WBGAIN, 0)
+        cam.put_Option(amcam.AMCAM_OPTION_RAW, 0)
 
-        cam.put_Option(amcam.AMCAM_OPTION_COLORMATIX, 0)
-
-        cam.put_Option(amcam.AMCAM_OPTION_LINEAR, 0)
-        cam.put_Option(amcam.AMCAM_OPTION_CURVE, 0)
+        cam.put_Option(amcam.AMCAM_OPTION_COLORMATIX, 1)
+        cam.put_Option(amcam.AMCAM_OPTION_LINEAR, 1)
+        cam.put_Option(amcam.AMCAM_OPTION_CURVE, 1)
 
         cam.put_Option(amcam.AMCAM_OPTION_SHARPENING, 0)
-
         cam.put_Option(amcam.AMCAM_OPTION_DENOISE, 0)
-
-        cam.put_Option(amcam.AMCAM_OPTION_DEFECT_PIXEL, 0)
-
-        cam.put_Option(amcam.AMCAM_OPTION_RAW, 1)
+        cam.put_Option(amcam.AMCAM_OPTION_DEFECT_PIXEL, 1)
 
         cam.put_Brightness(0)
         cam.put_Contrast(0)

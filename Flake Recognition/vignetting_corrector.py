@@ -48,9 +48,9 @@ def vignetting_correction_direct_single_channel(image, flatfield, reference_poin
 
     corrected = np.clip(corrected, 0, 255).astype(np.uint8)
 
-    corrected_rgb = cv2.cvtColor(corrected, cv2.COLOR_BGR2RGB)
+    #corrected_rgb = cv2.cvtColor(corrected, cv2.COLOR_BGR2RGB)
 
-    return corrected_rgb
+    return corrected
 
 def vignetting_correction_direct_multi_channel(image, flatfield, reference_point=None, reference_radius=5):
 
@@ -85,7 +85,6 @@ def vignetting_correction_direct_multi_channel(image, flatfield, reference_point
         mean_corr = np.mean(corrected, axis=(0, 1))
 
         scale = mean_orig / (mean_corr + epsilon)
-
 
     corrected *= scale
 
@@ -224,7 +223,7 @@ if __name__ == "__main__":
     image = cv2.imread(image_path)
     flatfield= cv2.imread(flatfield_path)
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    corrected_image = vignetting_correction_direct_single_channel(image, flatfield, reference_point=(image.shape[1]//2, image.shape[0]//2))
+    corrected_image = vignetting_correction_direct_single_channel(image, flatfield)
 
     plt.figure(figsize=(10, 5))
 
@@ -243,3 +242,15 @@ if __name__ == "__main__":
     corrected_image_gray = cv2.cvtColor(corrected_image, cv2.COLOR_RGB2GRAY)
     DataVisualizer.surface_graphing(corrected_image_gray)
     Util.save_image(corrected_image)
+
+    '''
+    from pathlib import Path
+
+    folder_path = Path(filedialog.askdirectory())
+
+    if folder_path:
+        avg_image = average_images_in_folder(str(folder_path))
+
+        if avg_image is not None:
+            cv2.imwrite(str(folder_path / "flatfield_average.png"), avg_image)
+    '''

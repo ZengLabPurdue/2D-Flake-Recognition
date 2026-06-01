@@ -217,13 +217,21 @@ if __name__ == "__main__":
         filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")]
     )
 
+    '''
+    image_path_2 = filedialog.askopenfilename(
+        filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")]
+    )
+    '''
+    
     img = cv2.imread(image_path)
+    #img_2 = cv2.imread(image_path_2)
 
     if img is None:
         print("No image loaded.")
         exit()
 
     img_float = img.astype(np.float32)
+    #img_2_float = img_2.astype(np.float32)
 
     b, g, r = cv2.split(img_float)
 
@@ -241,9 +249,8 @@ if __name__ == "__main__":
 
     DataVisualizer.surface_graphing(vignette_display_gray)
 
-    '''
-    DataVisualizer.surface_graphing(g)
-    DataVisualizer.surface_graphing(g_blur)
+    #DataVisualizer.surface_graphing(g)
+    #DataVisualizer.surface_graphing(g_blur)
 
     plt.figure(figsize=(8, 6))
     plt.title("Channel-wise Gaussian Smoothed Vignetting Field")
@@ -257,4 +264,3 @@ if __name__ == "__main__":
     cv2.imwrite(save_path, vignette_display)
 
     print(f"Saved vignette image to: {save_path}")
-    '''
