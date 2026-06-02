@@ -72,6 +72,8 @@ IMAGE_UM_PER_PIXEL_2X_LOW = 5.81395 # um
 
 MAGNIFICATION = 2
 
+PROCESS_FRAME_RATE = 33 # ms
+
 #FLATFIELD_IMG = cv2.imread(str(home_dir / "Flatfields" / "flatfield_2x_med_smoothed.png"))
 
 try:
@@ -195,8 +197,6 @@ class App:
         self.root.bind_all("<Button-1>", self.clear_focus, add="+")
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-
-        self.process_frame()
 
     # ------------- Initialization -------------
 
@@ -1287,6 +1287,30 @@ class App:
 
     # ------------- Mapping Functions -------------
 
+    def initialize_2x_mapping(self):
+
+        self.live_mapping_var.set(False)
+
+        self.change_objective(1)
+
+        self.true_map = np.zeros((3000, 3000, 3), dtype=np.uint8)
+
+        self.get_position()
+        self.stage_center_x = x_pos
+        self.stage_center_y = y_pos
+
+        self.map_center_x = self.true_map.shape[1] // 2
+        self.map_center_y = self.true_map.shape[0] // 2
+
+        self.last_live_frame_rgb = None
+        self.last_live_map_x = None
+        self.last_live_map_y = None
+
+        self.was_busy = False
+        self.capture_after_move = False
+
+        self.display_map()
+
     def set_live_map_2x(self, live=True):
 
         self.live_mapping_var.set(live)
@@ -1298,18 +1322,9 @@ class App:
         if not self.live_mapping_var.get():
             return
 
-        self.true_map = np.zeros((3000, 3000, 3), dtype=np.uint8)
+        self.initialize_2x_mapping()
 
-        self.get_position()
-        self.stage_center_x = x_pos
-        self.stage_center_y = y_pos
-
-        self.map_center_x = self.true_map.shape[1] // 2
-        self.map_center_y = self.true_map.shape[0] // 2
-
-        print(f"Stage Center: ({self.stage_center_x:.1f}, {self.stage_center_y:.1f}) | Map Center: ({self.map_center_x}, {self.map_center_y})")
-
-    def place_live_frame_on_map(self, img, cur_X, cur_Y, zoom):
+    def place_live_frame_on_map(self, img, zoom):
 
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
@@ -1318,8 +1333,7 @@ class App:
 
         h, w = img_rgb.shape[:2]
 
-        self.get_position()
-
+        cur_X, cur_Y, _ = pc.get_curr_pos()
         dx_um = cur_X - self.stage_center_x
         dy_um = cur_Y - self.stage_center_y
 
@@ -1336,6 +1350,7 @@ class App:
         map_x = self.map_center_x + dx_px
         map_y = self.map_center_y + dy_px
 
+        '''
         if self.last_live_frame_rgb is not None:
         
             try:
@@ -1347,17 +1362,19 @@ class App:
                 last_crop = last_frame[:h_common, :w_common]
                 cur_crop = img_rgb[:h_common, :w_common]
 
+                print("Running ORB/RANSAC shift correction...")
                 shift_x, shift_y, score, num_matches, num_inliers = self.orb_ransac_shift_correction(
                     last_crop,
                     cur_crop
                 )
+                print("Finished ORB/RANSAC shift correction")
 
                 print(
                     f"ORB/RANSAC Relative Shift: ({shift_x:.2f}, {shift_y:.2f}) | "
                     f"Score={score:.3f} | Matches={num_matches} | Inliers={num_inliers}"
                 )
 
-                self.save_ecc_comparison(
+                self.save_shift_comparison(
                     last_crop,
                     cur_crop,
                     score=score,
@@ -1374,16 +1391,17 @@ class App:
                     and abs(shift_x) < MAX_REASONABLE_SHIFT
                     and abs(shift_y) < MAX_REASONABLE_SHIFT
                 ):
-                    map_x = self.last_live_map_x - int(round(shift_x))
-                    map_y = self.last_live_map_y - int(round(shift_y))
+                    map_x = self.last_live_map_x + int(round(shift_x))
+                    map_y = self.last_live_map_y + int(round(shift_y))
                 else:
                     print("ORB/RANSAC score too low or shift too large, using stage-based map position")
 
-            except Exception:
-                print("ECC correction failed to converge!")
+            except Exception as e:
+                print("Error during ORB/RANSAC shift correction:", e)
 
         else:
-            print("Skipping ECC: no previous live frame yet")
+            print("Skipping correction: no previous live frame yet")
+        '''
             
         x_start = int(map_x - w // 2)
         y_start = int(map_y - h // 2)
@@ -1550,112 +1568,52 @@ class App:
 
         self.save_image(image=comparison, save_dir=save_dir, filename=filename, output=False)
 
-    def auto_map_2x(self, window=(3, 3), zoom=4):
-
-        self.open_panel("Info Panel")
-
-        self.change_objective(1)
-
-        self.set_view("Map", False)
-
-        self.true_map = np.zeros((3000, 3000, 3), dtype=np.uint8)
+    def auto_map_2x(self, window=(5, 5), zoom=4):
 
         self.scan_running = True
 
-        coords, total_frames = self.generate_rect_coords(window[1], window[0])
+        try:
+            self.set_view("Map", False)
 
-        map_x = self.true_map.shape[1] // 2
-        map_y = self.true_map.shape[0] // 2
+            self.set_origin()
 
-        prev_gray = None
+            self.initialize_2x_mapping()
 
-        i = 0
+            coords, total_frames = self.generate_rect_coords(window[1], window[0])
 
-        print(coords)
+            print(f"Generated {total_frames} coordinates for mapping: {coords}")
 
-        for offset_x, offset_y in coords:
+            for i, (offset_x, offset_y) in enumerate(coords, start=1):
 
-            target_x = offset_x * X_SIZE_2 * CENTER_CROP_WIDTH_RATIO_2X / 3
-            target_y = -offset_y * Y_SIZE_2 * CENTER_CROP_HEIGHT_RATIO_2X / 3
+                target_x = offset_x * X_SIZE_2 * CENTER_CROP_WIDTH_RATIO_2X / 2
+                target_y = -offset_y * Y_SIZE_2 * CENTER_CROP_HEIGHT_RATIO_2X / 2
 
-            pc.go_to_pos(target_x, target_y)
-            pc.wait_until_not_busy()
+                pc.go_to_pos(target_x, target_y)
+                pc.wait_until_not_busy()
 
-            img = self.capture_frame()
+                img = self.capture_frame(num_images=2)
 
-            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                if img is None:
+                    print("No image captured, skipping this tile.")
+                    continue
 
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                self.place_live_frame_on_map(img, zoom=zoom)
 
-            gray_small = gray[::zoom, ::zoom]
+                progress_percent = f"{i}/{total_frames}"
 
-            if prev_gray is not None:
+                self.update_scan_status(scan_type="Auto Map 2x", stage="Mapping", progress=progress_percent)
 
-                shift, response = cv2.phaseCorrelate(
-                    np.float32(prev_gray),
-                    np.float32(gray_small)
-                )
+                self.root.update()
 
-                dx, dy = shift
+        except Exception as ex:
+            print("Auto map error:", ex)
 
-                # Scale back up from downsampling
-                dx *= zoom
-                dy *= zoom
-
-                dx /= 3
-                dy /= 3
-
-                map_x -= int(dx / zoom)
-                map_y -= int(dy / zoom)
-
-                print(map_x, map_y)
-
-            prev_gray = gray_small.copy()
-
-            img_small = img_rgb[::zoom, ::zoom]
-
-            h, w = img_small.shape[:2]
-
-            x_start = max(0, map_x)
-            y_start = max(0, map_y)
-
-            x_end = min(self.true_map.shape[1], x_start + w)
-            y_end = min(self.true_map.shape[0], y_start + h)
-
-            crop = img_small[:y_end - y_start, :x_end - x_start]
-
-            self.true_map[y_start:y_end, x_start:x_end] = crop
-
-            existing = self.true_map[y_start:y_end, x_start:x_end]
-
-            blended = cv2.addWeighted(
-                existing,
-                0.5,
-                crop,
-                0.5,
-                0
-            )
-
-            self.true_map[y_start:y_end, x_start:x_end] = blended
-
-            self.display_map()
-
-            if self.view_mode == "Camera View":
-                self.display_image(img_rgb)
-
-            i += 1
-
-            progress_percent = f"{i}/{total_frames}"
-
-            self.update_scan_status(
-                scan_type="Live Mapping",
-                stage="Mapping",
-                progress=progress_percent
-            )
-
-        self.scan_running = False
-
-        print("Live mapping finished!")
+        finally:
+            pc.go_to_pos(0, 0)
+            self.scan_running = False
+            self.live_mapping_var.set(False)
+            self.set_view("Map", False)
+            print("Auto mapping finished!")
 
     def capture_area(self, window=(5, 5), zoom=4):
 
@@ -2019,18 +1977,27 @@ class App:
 
             self.frame_id += 1
 
-            #self.process_frame()
-
         except amcam.HRESULTException as ex:
             print("Camera error:", ex)
+
+    def start_processing_loop(self):
+        self.last_used_capture_frame_id = -1
+        self.last_processed_frame_id = -1
+        self.process_frame()
 
     def process_frame(self):
         try:
             if len(self.frame_buffer) == 0:
-                self.root.after(10, self.process_frame)
+                self.root.after(PROCESS_FRAME_RATE, self.process_frame)
                 return
             data = self.frame_buffer[-1]
             img = data["frame"]
+
+            if data["frame_id"] == self.last_processed_frame_id:
+                self.root.after(PROCESS_FRAME_RATE, self.process_frame)
+                return
+
+            self.last_processed_frame_id = data["frame_id"]
 
             if self.live_mapping_var.get():
                 busy = pc.is_busy()     
@@ -2040,11 +2007,12 @@ class App:
                 self.was_busy = busy
 
                 if busy:
+                    self.root.after(PROCESS_FRAME_RATE, self.process_frame)
                     return
                 
                 if self.capture_after_move:
                     self.capture_after_move = False
-                    self.place_live_frame_on_map(self.crop_frame(img), data["x"], data["y"], zoom=4)
+                    self.place_live_frame_on_map(self.crop_frame(img), zoom=3)
 
             elif self.view_mode == "Camera View":
                 if self.filter_var.get():
@@ -2058,7 +2026,7 @@ class App:
         except Exception as ex:
             print("Frame processing error:", ex)
 
-        self.root.after(20, self.process_frame)
+        self.root.after(PROCESS_FRAME_RATE, self.process_frame)
 
     def run_camera(self):
         cams = amcam.Amcam.EnumV2()
@@ -2095,6 +2063,7 @@ class App:
         self.root.update()
 
         self.hcam.StartPullModeWithCallback(self.cameraCallback, self)
+        self.start_processing_loop()
 
         self.start_camera_frame_timer = 0
 
@@ -2140,17 +2109,26 @@ class App:
         start_time = time.time()
 
         while count < num_images:
-            try:
+            try:        
+                self.root.update_idletasks()
+                self.root.update()
+                
                 data = self.frame_buffer[-1]
+
                 if data["stage_busy"]:
                     time.sleep(0.05)
                     continue
+                if data["frame_id"] <= self.last_used_capture_frame_id:
+                    time.sleep(0.05)
+                    continue    
                 if data["timestamp"] < start_time:
+                    time.sleep(0.05)
                     continue
+                self.last_used_capture_frame_id = data["frame_id"]
                 sum_frame += data["frame"].astype(np.float32)
                 count += 1
-            except Exception:
-                print("Frame timeout")
+            except Exception as e:
+                print(f"Error occurred while capturing frame: {e}")
                 break
 
         if count == 0:
@@ -2246,6 +2224,8 @@ class App:
 
         cams = amcam.Amcam.EnumV2()
         self.hcam = amcam.Amcam.Open(cams[0].id)
+
+        self.reset_camera_settings(self.hcam)
 
         self.hcam.put_eSize(index)
 
