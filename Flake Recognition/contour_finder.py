@@ -59,6 +59,7 @@ def find_flakes(image_bgr, edge_threshold=10, area_threshold=500, display=False)
     return background_img, area_filtered_contours
 
 if __name__ == "__main__":
+    '''
     folder_path = filedialog.askdirectory(title="Select Image Folder")
 
     extensions = (".png", ".jpg", ".jpeg", ".bmp")
@@ -70,3 +71,8 @@ if __name__ == "__main__":
             image_bgr = cv2.imread(image_path, cv2.IMREAD_COLOR)
 
             find_flakes(image_bgr, display=True)
+    '''
+            
+    image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
+    image_bgr = cv2.imread(image_path, cv2.IMREAD_COLOR)
+    find_flakes(image_bgr, display=True)

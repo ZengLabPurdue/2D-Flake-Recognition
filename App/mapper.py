@@ -74,7 +74,7 @@ MAGNIFICATION = 2
 
 PROCESS_FRAME_RATE = 33 # ms
 
-#FLATFIELD_IMG = cv2.imread(str(home_dir / "Flatfields" / "flatfield_2x_med_smoothed.png"))
+FLATFIELD_IMG = cv2.imread(str(home_dir / "Flatfields" / "flatfield_2x_med_smoothed_2.png"))
 
 try:
     pc = Prior_Controller(PRIOR_COM_PORT, DLL_PATH)
@@ -233,7 +233,7 @@ class App:
         menu_bar.add_cascade(label="Panels", menu=panel_menu)
 
         map_menu = Menu(menu_bar, tearoff=0)
-        map_menu.add_radiobutton(label="Live Map 2x", variable=self.live_mapping_var, value=True, command=lambda: self.set_live_map_2x(True))
+        map_menu.add_radiobutton(label="Live Map 2x", variable=self.live_mapping_var, value=True, command=lambda: self.set_live_map_2x())
         map_menu.add_command(label="Auto Map 2x", command=self.auto_map_2x)
         map_menu.add_command(label="Capture Area", command=self.capture_area)
         menu_bar.add_cascade(label="Map", menu=map_menu)
@@ -1311,18 +1311,15 @@ class App:
 
         self.display_map()
 
-    def set_live_map_2x(self, live=True):
+    def set_live_map_2x(self):
 
-        self.live_mapping_var.set(live)
+        self.initialize_2x_mapping()
+
+        self.live_mapping_var.set(True)
 
         self.open_panel("Stage Control Panel")
 
         self.set_view("Map", False)
-
-        if not self.live_mapping_var.get():
-            return
-
-        self.initialize_2x_mapping()
 
     def place_live_frame_on_map(self, img, zoom):
 
@@ -1615,11 +1612,11 @@ class App:
             self.set_view("Map", False)
             print("Auto mapping finished!")
 
-    def capture_area(self, window=(5, 5), zoom=4):
+    def capture_area(self, window=(7, 7), zoom=4):
 
         self.open_panel("Info Panel")
 
-        self.change_objective(1)
+        #self.change_objective(1)
 
         self.scan_running = True
 
@@ -1631,8 +1628,8 @@ class App:
 
         for offset_x, offset_y in coords:
 
-            target_x = offset_x * 300
-            target_y = -offset_y * 300
+            target_x = offset_x * 200
+            target_y = -offset_y * 200
 
             pc.go_to_pos(target_x, target_y)
             pc.wait_until_not_busy()
@@ -2000,6 +1997,7 @@ class App:
             self.last_processed_frame_id = data["frame_id"]
 
             if self.live_mapping_var.get():
+                print("Running live mapping frame processing...")
                 busy = pc.is_busy()     
                 if self.was_busy and not busy:
                     self.capture_after_move = True
@@ -2007,14 +2005,16 @@ class App:
                 self.was_busy = busy
 
                 if busy:
+                    print("Busy")
                     self.root.after(PROCESS_FRAME_RATE, self.process_frame)
                     return
                 
                 if self.capture_after_move:
+                    print("Placing frame")
                     self.capture_after_move = False
                     self.place_live_frame_on_map(self.crop_frame(img), zoom=3)
 
-            elif self.view_mode == "Camera View":
+            if self.view_mode == "Camera View":
                 if self.filter_var.get():
                     display = cv2.cvtColor(chip_edge_classifier.chip_filter(img), cv2.COLOR_GRAY2RGB)
                 else:
@@ -2026,7 +2026,7 @@ class App:
         except Exception as ex:
             print("Frame processing error:", ex)
 
-        self.root.after(PROCESS_FRAME_RATE, self.process_frame)
+        self.root.after(PROCESS_FRAME_RATE, self.process_frame)    
 
     def run_camera(self):
         cams = amcam.Amcam.EnumV2()
@@ -2174,10 +2174,11 @@ class App:
                 data = self.frame_buffer[-1]
                 if data["stage_busy"]:
                     time.sleep(0.05)
-                    print("Stage is busy, waiting...")
                     continue
+                if data["frame_id"] <= self.last_used_capture_frame_id:
+                    time.sleep(0.05)
+                    continue    
                 if data["timestamp"] < start_time:
-                    print(f"Start time {start_time} is later than frame time {data['timestamp']}, waiting for new frame...")
                     time.sleep(0.05)
                     continue
                 sum_frame += data["frame"].astype(np.float32)

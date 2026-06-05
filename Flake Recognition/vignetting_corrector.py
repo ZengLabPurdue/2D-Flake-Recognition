@@ -33,14 +33,14 @@ def vignetting_correction_direct_single_channel(image, flatfield, reference_poin
         image_ref = image_float[y1:y2, x1:x2]
         corrected_ref = corrected[y1:y2, x1:x2]
 
-        ref_orig = np.mean(image_ref, axis=(0, 1))
-        ref_corr = np.mean(corrected_ref, axis=(0, 1))
+        ref_orig = np.mean(image_ref)
+        ref_corr = np.mean(corrected_ref)
 
-        scale = ref_orig / (ref_corr + epsilon)
+        scale = ref_orig / (ref_corr + epsilon) * 0.75
 
     else:
-        mean_orig = np.mean(image_float, axis=(0, 1))
-        mean_corr = np.mean(corrected, axis=(0, 1))
+        mean_orig = np.mean(image_float)
+        mean_corr = np.mean(corrected)
 
         scale = mean_orig / (mean_corr + epsilon)
 
@@ -48,7 +48,7 @@ def vignetting_correction_direct_single_channel(image, flatfield, reference_poin
 
     corrected = np.clip(corrected, 0, 255).astype(np.uint8)
 
-    #corrected_rgb = cv2.cvtColor(corrected, cv2.COLOR_BGR2RGB)
+    corrected = cv2.cvtColor(corrected, cv2.COLOR_BGR2RGB)
 
     return corrected
 
@@ -217,13 +217,14 @@ def average_images_in_folder(folder_path):
     return avg_img
 
 if __name__ == "__main__":
+
     image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
     flatfield_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
 
     image = cv2.imread(image_path)
     flatfield= cv2.imread(flatfield_path)
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    corrected_image = vignetting_correction_direct_single_channel(image, flatfield)
+    corrected_image = vignetting_correction_direct_single_channel(image, flatfield, reference_point=(image.shape[1]//2, image.shape[0]//2), reference_radius=10)
 
     plt.figure(figsize=(10, 5))
 
@@ -233,7 +234,8 @@ if __name__ == "__main__":
     plt.axis("off")
 
     plt.subplot(1, 2, 2)
-    plt.imshow(corrected_image)
+    #plt.imshow(corrected_image)
+    plt.imshow(cv2.cvtColor(corrected_image, cv2.COLOR_BGR2RGB))
     plt.title("Corrected")
     plt.axis("off")
 

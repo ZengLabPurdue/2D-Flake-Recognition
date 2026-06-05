@@ -235,7 +235,7 @@ if __name__ == "__main__":
 
     b, g, r = cv2.split(img_float)
 
-    sigma = 5
+    sigma = 80
 
     b_blur = cv2.GaussianBlur(b, (0, 0), sigmaX=sigma, sigmaY=sigma)
     g_blur = cv2.GaussianBlur(g, (0, 0), sigmaX=sigma, sigmaY=sigma)

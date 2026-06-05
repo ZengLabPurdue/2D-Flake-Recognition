@@ -47,7 +47,7 @@ class Flake_Identifier():
     # image should be in RGB
     def identify_flakes_color_model(self, image, output=False):
         start_time = time.time()
-        masked_image, contours = contour_finder.find_flakes(image, display=False)
+        masked_image, contours = contour_finder.find_flakes(image, display=True)
 
         valid_contours = []
         for c in contours:

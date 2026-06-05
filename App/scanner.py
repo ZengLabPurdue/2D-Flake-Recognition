@@ -54,7 +54,7 @@ CENTER_CROP_WIDTH_RATIO_100X = 1
 CENTER_CROP_HEIGHT_RATIO_100X = 1
 
 RELATIVE_2X_Z = 0
-RELATIVE_10X_Z = 1000
+RELATIVE_10X_Z = 1250
 RELATIVE_20X_Z = 4300
 RELATIVE_100X_Z = 4300
 
@@ -1194,7 +1194,8 @@ class App:
         if position == 1:
             self.auto_focus()
         elif position == 2:
-            self.auto_focus(start_range=500, accuracy=10, steps=20)
+            #self.auto_focus(start_range=500, accuracy=10, steps=20)
+            pass
         elif position == 3:
             self.auto_focus(start_range=200, accuracy=5, steps=20)
         elif position == 4:
@@ -2052,7 +2053,7 @@ class App:
 
         self.hcam = amcam.Amcam.Open(cams[0].id)
 
-        self.hcam.put_eSize(0)
+        self.hcam.put_eSize(1)
 
         self.frame_buffer = deque(maxlen=5)
 

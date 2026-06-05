@@ -80,7 +80,7 @@ class Prior_Controller():
         if ret:
             print(f"Api error {ret}")
         else:
-            print(f"OK {rx.value.decode()}")
+            print(f"Ok {rx.value.decode()}")
         '''
         return ret, rx.value.decode()
     
@@ -126,13 +126,10 @@ class Prior_Controller():
     def go_to_pos(self, new_x, new_y):
         if self.is_busy():
             return False
-        self.x = new_x
-        self.y = new_y
-        #print(f"Going to ({new_x}, {new_y})")
-        self.cmd(f"controller.stage.goto-position {self.x} {self.y}")
-        self.cmd("controller.stage.speed.get")
+        self.cmd(f"controller.stage.goto-position {new_x} {new_y}")
+        self.wait_until_not_busy()
         self.get_curr_pos()
-        # time.sleep(1)
+        return True
 
     def get_curr_pos(self):
         position = self.cmd("controller.stage.position.get")
@@ -147,7 +144,7 @@ class Prior_Controller():
 
     def set_z_velocity(self, velocity):
         self.z_velocity = velocity
-        self.cmd(f"controller.z.speed.set {self.velocity}")
+        self.cmd(f"controller.z.speed.set {self.z_velocity}")
         self.cmd("controller.z.speed.get")
 
     def get_z_velocity(self):
@@ -157,7 +154,7 @@ class Prior_Controller():
 
     def set_z_acceleration(self, acceleration):
         self.z_acceleration = acceleration
-        self.cmd(f"controller.z.acc.set {self.acceleration}")
+        self.cmd(f"controller.z.acc.set {self.z_acceleration}")
         self.cmd("controller.z.acc.get")
 
     def go_to_z_pos(self, new_z):
@@ -169,8 +166,14 @@ class Prior_Controller():
         # time.sleep(1)
 
     def get_curr_z_pos(self):
-        position = self.cmd("controller.z.position.get")
-        self.z = int(position[1]) / 10
+        _, response = self.cmd("controller.z.position.get")
+        response = response.strip()
+        try:
+            self.z = int(response) / 10
+        except ValueError:
+            print(f"Could not parse Z position: {response!r}")
+            return self.z
+
         return self.z
     
     def set_origin(self):
