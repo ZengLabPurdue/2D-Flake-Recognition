@@ -28,6 +28,7 @@ api_path = home_dir / "APIs"
 
 sys.path.insert(0, str(parent_dir))
 sys.path.insert(0, str(api_path))
+sys.path.insert(0, str(parent_dir / "Flake Recognition"))
 
 import amcam
 from prior_api import Prior_Controller
@@ -35,6 +36,7 @@ from turret_api import Turret_Controller
 import chip_edge_classifier
 import flake_identifier
 import flake_identifier_yolo
+import vignetting_corrector
 
 DLL_PATH = os.getcwd() + r"\APIs\PriorSDK1.9.2\x64\PriorScientificSDK.dll"
 PRIOR_COM_PORT = sys.argv[1]
@@ -65,6 +67,11 @@ X_SIZE_10 = 2142
 Y_SIZE_10 = 1359
 
 MAGNIFICATION = 2
+
+IMAGE_UM_PER_PIXEL_2X_MED = 3.8569 # um
+IMAGE_UM_PER_PIXEL_10X_MED = 0.76609 # um
+
+FLATFIELD_IMG = cv2.imread(str(home_dir / "Flatfields" / "flatfield_2x_med_smoothed.png"))
 
 try:
     pc = Prior_Controller(PRIOR_COM_PORT, DLL_PATH)
@@ -140,8 +147,8 @@ class App:
         })
 
         self.panels.append({
-            "name": "Capture Image Panel",
-            "frame": self.init_capture_image_panel(),
+            "name": "Capture Panel",
+            "frame": self.init_capture_panel(),
             "var": BooleanVar(value=False)
         })
 
@@ -586,14 +593,14 @@ class App:
         self.btn_down.grid(row=0, column=1, sticky="nsew")
 
         return self.manual_control_panel
-
-    def init_capture_image_panel(self):
+    
+    def init_capture_panel(self):
 
         self.capture_panel = Frame(
             self.main_frame,
             bg="#f0f0f0",
             width=204,
-            height=80
+            height=120
         )
         self.capture_panel.place(relx=1.0, rely=0.0, anchor="ne")
 
@@ -601,34 +608,43 @@ class App:
             self.capture_panel,
             bg="white",
             width=200,
-            height=78
+            height=118
         )
         self.capture_background.place(x=2, y=0)
 
         capture_title = Label(
             self.capture_panel,
-            text="Image Capture",
+            text="Capture",
             bg="white",
             fg="black",
             font=("TkDefaultFont", 13)
         )
-        capture_title.place(relx=0.5, y=5, anchor="n")
+        capture_title.place(relx=0.5, y=10, anchor="n")
 
         style = ttk.Style()
         style.configure("Save.TButton", background="white")
         style.configure("Save.TButton", relief="flat")
 
-        self.capture_button = ttk.Button(
+        self.capture_image_button = ttk.Button(
             self.capture_background,
-            text="Capture & Save",
+            text="Save Image",
             style="Save.TButton",
             command=self.save_image
         )
-        self.capture_button.place(relx=0.5, y=50, anchor="center")
-        self.buttons.append(self.capture_button)
+        self.capture_image_button.place(relx=0.5, y=55, anchor="center")
+        self.buttons.append(self.capture_image_button)
+
+        self.capture_map_button = ttk.Button(
+            self.capture_background,
+            text="Save Map",
+            style="Save.TButton",
+            command=lambda: self.save_image(image=cv2.cvtColor(self.true_map, cv2.COLOR_RGB2BGR))
+        )
+        self.capture_map_button.place(relx=0.5, y=90, anchor="center")
+        self.buttons.append(self.capture_map_button)
 
         return self.capture_panel
-
+    
     def init_adjust_exposure_panel(self):
         self.adjust_exposure_panel = Frame(
             self.main_frame,
@@ -1378,6 +1394,12 @@ class App:
 
         i = 1
         for offset_x, offset_y in coords:
+
+            '''
+            target_x = center_x + offset_x * self.hcam.get_Size()[0] * IMAGE_UM_PER_PIXEL_2X_MED * CENTER_CROP_WIDTH_RATIO_2X
+            target_y = center_y - offset_y * self.hcam.get_Size()[1] * IMAGE_UM_PER_PIXEL_2X_MED * CENTER_CROP_HEIGHT_RATIO_2X
+            '''
+            
             target_x = center_x + offset_x * X_SIZE_2 * CENTER_CROP_WIDTH_RATIO_2X
             target_y = center_y - offset_y * Y_SIZE_2 * CENTER_CROP_HEIGHT_RATIO_2X
 
@@ -1447,6 +1469,8 @@ class App:
 
         self.change_objective(2)
 
+        input("Press Enter to start 10x scan...")
+
         if scan_path is None:
             path = home_dir / "Scans" / datetime.now().strftime("10x (%Y-%m-%d) (%H-%M-%S)")
         else:
@@ -1455,6 +1479,8 @@ class App:
         if scan_coordinates_10x is None:
             x, y, _ = pc.get_curr_pos()
             scan_coordinates_10x = [[x, y, 10, 10]]
+
+        cropped_flatfield = self.crop_frame(FLATFIELD_IMG)
 
         i = 0
         for coordinates in scan_coordinates_10x:
@@ -1483,6 +1509,11 @@ class App:
 
             j = 0
             for offset_x, offset_y in coords:
+                '''
+                target_x = center_x + offset_x * self.hcam.get_Size()[0] * IMAGE_UM_PER_PIXEL_10X_MED * CENTER_CROP_WIDTH_RATIO_10X
+                target_y = center_y - offset_y * self.hcam.get_Size()[1] * IMAGE_UM_PER_PIXEL_10X_MED * CENTER_CROP_HEIGHT_RATIO_10X
+                '''
+                
                 target_x = center_x + offset_x * X_SIZE_10 * CENTER_CROP_WIDTH_RATIO_10X
                 target_y = center_y - offset_y * Y_SIZE_10 * CENTER_CROP_HEIGHT_RATIO_10X
 
@@ -1492,6 +1523,7 @@ class App:
                 pc.wait_until_not_busy()
 
                 img = self.capture_frame()
+                img = vignetting_corrector.vignetting_correction_direct_single_channel(img, cropped_flatfield, reference_point=(img.shape[1]//2, img.shape[0]//2))
                 img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
                 image_path = path / f"Chip {i} ({center_x}, {center_y})" / "Raw" / f"img_10x_{j}.png"
@@ -1562,8 +1594,11 @@ class App:
     
     def generate_10x_scan_coordinates(self, chips, scan_center_x, scan_center_y, scale):
 
-        window_w = int(self.hcam.get_Size()[0] * CENTER_CROP_WIDTH_RATIO_2X / scale / 5 / CENTER_CROP_WIDTH_RATIO_10X)
-        window_h = int(self.hcam.get_Size()[1] * CENTER_CROP_HEIGHT_RATIO_2X / scale / 5 / CENTER_CROP_HEIGHT_RATIO_10X)
+        window_w = int(self.hcam.get_Size()[0] * CENTER_CROP_WIDTH_RATIO_2X / scale / (IMAGE_UM_PER_PIXEL_2X_MED / IMAGE_UM_PER_PIXEL_10X_MED) / CENTER_CROP_WIDTH_RATIO_10X)
+        window_h = int(self.hcam.get_Size()[1] * CENTER_CROP_HEIGHT_RATIO_2X / scale / (IMAGE_UM_PER_PIXEL_2X_MED / IMAGE_UM_PER_PIXEL_10X_MED) / CENTER_CROP_HEIGHT_RATIO_10X)
+        
+        #window_w = int(self.hcam.get_Size()[0] / scale / (IMAGE_UM_PER_PIXEL_2X_MED / IMAGE_UM_PER_PIXEL_10X_MED))
+        #window_h = int(self.hcam.get_Size()[1] / scale / (IMAGE_UM_PER_PIXEL_2X_MED / IMAGE_UM_PER_PIXEL_10X_MED))
 
         scan_coordinates_10x = []
 
@@ -1582,7 +1617,7 @@ class App:
             start_x = max(0, chip_center_x - grid_w // 2)
             start_y = max(0, chip_center_y - grid_h // 2)
 
-            start_pos_x = (chip_center_x - self.true_map.shape[1] / 2) * (X_SIZE_2 * CENTER_CROP_WIDTH_RATIO_2X) / (self.hcam.get_Size()[0] / scale * CENTER_CROP_WIDTH_RATIO_2X) + scan_center_x
+            start_pos_x = - (chip_center_x - self.true_map.shape[1] / 2) * (X_SIZE_2 * CENTER_CROP_WIDTH_RATIO_2X) / (self.hcam.get_Size()[0] / scale * CENTER_CROP_WIDTH_RATIO_2X) + scan_center_x
             start_pos_y = - (chip_center_y - self.true_map.shape[0] / 2) * (Y_SIZE_2 * CENTER_CROP_WIDTH_RATIO_2X) / (self.hcam.get_Size()[1] / scale * CENTER_CROP_WIDTH_RATIO_2X) + scan_center_y
             scan_coordinates_10x.append([round(start_pos_x), round(start_pos_y), num_windows_x, num_windows_y])
 
@@ -2045,6 +2080,27 @@ class App:
         except amcam.HRESULTException as ex:
             print("Camera error:", ex)
 
+    def crop_frame(self, frame):
+
+        h, w = frame.shape[:2]
+
+        if self.magnification == "2x":
+            crop_w = int(w * CENTER_CROP_WIDTH_RATIO_2X)
+            crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_2X)
+
+        elif self.magnification == "10x":
+            crop_w = int(w * CENTER_CROP_WIDTH_RATIO_10X)
+            crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_10X)
+
+        cx, cy = w // 2, h // 2
+
+        x1 = cx - crop_w // 2
+        y1 = cy - crop_h // 2
+        x2 = cx + crop_w // 2
+        y2 = cy + crop_h // 2
+
+        return frame[y1:y2, x1:x2]
+
     def run_camera(self):
         cams = amcam.Amcam.EnumV2()
         if not cams:
@@ -2057,8 +2113,12 @@ class App:
 
         self.frame_buffer = deque(maxlen=5)
 
+        '''
         self.hcam.put_AutoExpoEnable(True)
         self.hcam.put_AutoExpoTarget(DEFAULT_EXPOSURE)
+        '''
+        
+        self.reset_camera_settings(self.hcam)
 
         self.width, self.height = self.hcam.get_Size()
         bufsize = ((self.width * 24 + 31) // 32 * 4) * self.height
@@ -2134,9 +2194,9 @@ class App:
 
         for _ in range(num_images):
             self.wait_until_new_frame()
-            sum_frame += self.current_frame.astype(np.float32)
+            sum_frame += self.frame_buffer[-1].astype(np.float32)
 
-        avg_frame = (sum_frame / num_images).astype(self.current_frame.dtype)
+        avg_frame = (sum_frame / num_images).astype(self.frame_buffer[-1].dtype)
 
         h, w = avg_frame.shape[:2]
         if self.magnification == "2x":
@@ -2168,6 +2228,27 @@ class App:
         avg_frame = (sum_frame / num_images).astype(self.current_frame.dtype)
 
         return avg_frame
+
+    def reset_camera_settings(self, cam):
+        cam.put_AutoExpoEnable(False)
+
+        cam.put_ExpoTime(1500)
+        cam.put_ExpoAGain(100)
+
+        cam.put_Option(amcam.AMCAM_OPTION_RAW, 0)
+
+        cam.put_Option(amcam.AMCAM_OPTION_COLORMATIX, 1)
+        cam.put_Option(amcam.AMCAM_OPTION_LINEAR, 1)
+        cam.put_Option(amcam.AMCAM_OPTION_CURVE, 1)
+
+        cam.put_Option(amcam.AMCAM_OPTION_SHARPENING, 0)
+        cam.put_Option(amcam.AMCAM_OPTION_DENOISE, 0)
+        cam.put_Option(amcam.AMCAM_OPTION_DEFECT_PIXEL, 1)
+
+        cam.put_Brightness(0)
+        cam.put_Contrast(0)
+        cam.put_Gamma(100)
+        cam.put_Saturation(128)
 
     def on_close(self):
         self.hcam = None

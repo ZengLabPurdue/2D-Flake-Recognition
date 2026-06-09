@@ -36,7 +36,7 @@ def vignetting_correction_direct_single_channel(image, flatfield, reference_poin
         ref_orig = np.mean(image_ref)
         ref_corr = np.mean(corrected_ref)
 
-        scale = ref_orig / (ref_corr + epsilon) * 0.75
+        scale = ref_orig / (ref_corr + epsilon) # * 0.75
 
     else:
         mean_orig = np.mean(image_float)
@@ -48,7 +48,7 @@ def vignetting_correction_direct_single_channel(image, flatfield, reference_poin
 
     corrected = np.clip(corrected, 0, 255).astype(np.uint8)
 
-    corrected = cv2.cvtColor(corrected, cv2.COLOR_BGR2RGB)
+    #corrected = cv2.cvtColor(corrected, cv2.COLOR_BGR2RGB)
 
     return corrected
 
