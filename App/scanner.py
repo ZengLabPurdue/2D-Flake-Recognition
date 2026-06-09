@@ -22,17 +22,18 @@ from PIL import Image, ImageTk
 
 from pathlib import Path
 
+from Hardware.stage_controller import StageController
+from UI.panels.stage_control_panel import StageControlPanel
+from Imaging.frame_processing import FrameProcessor
+
 home_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 parent_dir = home_dir.parent
-api_path = home_dir / "APIs"
 
 sys.path.insert(0, str(parent_dir))
-sys.path.insert(0, str(api_path))
 sys.path.insert(0, str(parent_dir / "Flake Recognition"))
 
-import amcam
-from prior_api import Prior_Controller
-from turret_api import Turret_Controller
+from APIs.prior_api import Prior_Controller
+from APIs.turret_api import Turret_Controller
 import chip_edge_classifier
 import flake_identifier
 import flake_identifier_yolo
@@ -74,13 +75,8 @@ IMAGE_UM_PER_PIXEL_10X_MED = 0.76609 # um
 FLATFIELD_IMG = cv2.imread(str(home_dir / "Flatfields" / "flatfield_2x_med_smoothed.png"))
 
 try:
-    pc = Prior_Controller(PRIOR_COM_PORT, DLL_PATH)
     tc = Turret_Controller(TURRET_COM_PORT)
     fi = flake_identifier.Flake_Identifier()
-    pc.get_curr_pos()
-    x_pos = pc.x
-    y_pos = pc.y
-    z_pos = pc.z
 except Exception as e:
     print("Failed to connect to Prior Controller:", e)
     sys.exit(1)
@@ -107,10 +103,6 @@ class App:
 
         self.scan_running = False
 
-        self.step_size = 1000
-        self.xy_speed = 2600
-        self.z_step_size = 500
-        self.z_speed = 500
         self.hold_job = None
         self.is_hold = False
 
@@ -140,11 +132,48 @@ class App:
             "var": BooleanVar(value=False)
         })
 
+        self.stage = StageController(PRIOR_COM_PORT, DLL_PATH)
+        self.frame_processor = FrameProcessor(
+            root=self.root,
+            stage=self.stage,
+            home_dir=home_dir,
+
+            get_view_mode=lambda: self.view_mode,
+            get_filter_status=lambda: self.filter_var.get(),
+            get_magnification=lambda: self.magnification,
+            #get_live_mapping_status=lambda: self.live_mapping_var.get(),
+
+            display_image=self.display_image,
+            display_map=self.display_map,
+            #place_live_frame_on_map=self.place_live_frame_on_map,
+
+            disable_buttons=self.disable_buttons,
+            enable_buttons=self.enable_buttons,
+        )
+        self.frame_processor.run_camera()
+
+        self.stage_control_panel = StageControlPanel(
+            parent=self.main_frame,
+            root=self.root,
+            stage=self.stage,
+            disable_buttons=self.disable_buttons,
+            enable_buttons=self.enable_buttons,
+            register_button=self.buttons.append
+        )
+
+        self.panels.append({
+            "name": "Stage Control Panel",
+            "frame": self.stage_control_panel.frame,
+            "var": BooleanVar(value=False)
+        })
+
+        '''
         self.panels.append({
             "name": "Stage Control Panel",
             "frame": self.init_stage_control_panel(),
             "var": BooleanVar(value=False)
         })
+        '''
 
         self.panels.append({
             "name": "Capture Panel",
@@ -308,291 +337,6 @@ class App:
         self.scan_info_total_time_label.place(relx=0.5, y=115, anchor="n")
 
         return self.scan_info_panel
-
-    def init_stage_control_panel(self):
-
-        self.manual_control_panel = Frame(
-            self.main_frame,
-            bg="#f0f0f0",
-            width=204,
-            height=574
-        )
-        self.manual_control_panel.place(relx=1.0, rely=0.0, anchor="ne")
-
-        self.manual_control_background = Frame(
-            self.manual_control_panel,
-            bg="white",
-            width=200,
-            height=572
-        )
-        self.manual_control_background.place(x=2, y=0)
-
-        title_label = Label(
-            self.manual_control_panel,
-            text="Manual Control",
-            bg="white",
-            fg="black",
-            font=("TkDefaultFont", 13)
-        )
-        title_label.place(relx=0.5, y=10, anchor="n")
-
-        label_x = 10
-        entry_x = 130
-
-        # ------------- XY Control -------------
-
-        xy_step_label = Label(
-            self.manual_control_panel,
-            text="XY Step Size (µm):",
-            bg="white",
-            fg="black",
-            width=15,
-            anchor="e"
-        )
-        xy_step_label.place(relx=0.0, rely=0.0, x=label_x, y=45)
-
-        self.xy_step_size_var = StringVar(value=str(self.step_size))
-        self.xy_step_entry = ttk.Entry(
-            self.manual_control_panel,
-            textvariable=self.xy_step_size_var,
-            width=8
-        )
-        self.xy_step_entry.place(relx=0.0, rely=0.0, x=entry_x, y=45)
-
-        xy_hold_speed_label = Label(
-            self.manual_control_panel,
-            text="XY Speed (µm/s):",
-            bg="white",
-            fg="black",
-            width=15,
-            anchor="e"
-        )
-        xy_hold_speed_label.place(relx=0.0, rely=0.0, x=label_x, y=75)
-
-        self.xy_hold_speed_var = StringVar(value=str(self.xy_speed))
-        self.xy_hold_speed_var.trace_add("write", self.on_speed_change_xy)
-        self.xy_hold_speed_entry = ttk.Entry(
-            self.manual_control_panel,
-            textvariable=self.xy_hold_speed_var,
-            width=8
-        )
-        self.xy_hold_speed_entry.place(relx=0.0, rely=0.0, x=entry_x, y=75)
-
-        x_label = Label(
-            self.manual_control_panel,
-            text="X (µm):",
-            bg="white",
-            fg="black",
-            width=15,
-            anchor="e"
-        )
-        x_label.place(relx=0.0, rely=0.0, x=label_x, y=105)
-
-        self.x_coord_var = StringVar(value=str(x_pos))
-        self.x_coord_entry = ttk.Entry(
-            self.manual_control_panel,
-            textvariable=self.x_coord_var,
-            width=8
-        )
-        self.x_coord_entry.place(relx=0.0, rely=0.0, x=entry_x, y=105)
-
-        y_label = Label(
-            self.manual_control_panel,
-            text="Y (µm):",
-            bg="white",
-            fg="black",
-            width=15,
-            anchor="e"
-        )
-        y_label.place(relx=0.0, rely=0.0, x=label_x, y=135)
-
-        self.y_coord_var = StringVar(value=str(y_pos))
-        self.y_coord_entry = ttk.Entry(
-            self.manual_control_panel,
-            textvariable=self.y_coord_var,
-            width=8
-        )
-        self.y_coord_entry.place(relx=0.0, rely=0.0, x=entry_x, y=135)
-
-        style = ttk.Style()
-        style.configure("Normal.TButton", font="TkDefaultFont")
-        style.configure("Normal.TButton", background="white")
-        style.configure("Normal.TButton", relief="flat")
-
-        self.reset_button = ttk.Button(
-            self.manual_control_panel,
-            text="Set Origin",
-            style="Normal.TButton",
-            command=self.set_origin
-        )
-        self.reset_button.place(relx=0.5, y=170, anchor="n")
-        self.buttons.append(self.reset_button)
-
-        self.move_to_button = ttk.Button(
-            self.manual_control_panel,
-            text="Move to (X, Y)",
-            style="Normal.TButton",
-            command=self.go_to_position
-        )
-        self.move_to_button.place(relx=0.5, y=205, anchor="n")
-        self.buttons.append(self.move_to_button)
-
-        self.XY_manual_control_button_panel = Frame(
-            self.manual_control_panel,
-            bg="white",
-            width=120, 
-            height=90 
-        )
-        self.XY_manual_control_button_panel.place(relx=0.5, x=0, y=240, anchor="n")
-        self.XY_manual_control_button_panel.pack_propagate(False)
-
-        controls = Frame(self.XY_manual_control_button_panel, bg="white")
-        controls.pack(expand=True, fill="both")
-
-        style = ttk.Style()
-        style.configure("Arrow.TButton", font=("TkDefaultFont", 15), padding=5)
-        style.configure("Arrow.TButton", background="white")
-        style.configure("Arrow.TButton", relief="flat")
-
-        self.btn_forward = ttk.Button(controls, text="▴", style="Arrow.TButton")
-        self.btn_backward = ttk.Button(controls, text="▾", style="Arrow.TButton")
-        self.btn_left = ttk.Button(controls, text="◂", style="Arrow.TButton")
-        self.btn_right = ttk.Button(controls, text="▸", style="Arrow.TButton")
-
-        self.buttons.extend([self.btn_forward, self.btn_backward, self.btn_left, self.btn_right])
-
-        self.btn_forward.bind("<ButtonPress-1>", self.on_press_forward)
-        self.btn_forward.bind("<ButtonRelease-1>", self.on_release_forward)
-        self.btn_backward.bind("<ButtonPress-1>", self.on_press_backward)
-        self.btn_backward.bind("<ButtonRelease-1>", self.on_release_backward)
-        self.btn_left.bind("<ButtonPress-1>", self.on_press_left)
-        self.btn_left.bind("<ButtonRelease-1>", self.on_release_left)
-        self.btn_right.bind("<ButtonPress-1>", self.on_press_right)
-        self.btn_right.bind("<ButtonRelease-1>", self.on_release_right)
-
-        '''
-        self.root.bind("<Up>", self.on_press_forward)
-        self.root.bind("<KeyRelease-Up>", self.on_release_forward)
-
-        self.root.bind("<Down>", self.on_press_backward)
-        self.root.bind("<KeyRelease-Down>", self.on_release_backward)
-        '''
-        
-        for r in [0, 1]:
-            controls.rowconfigure(r, weight=1)
-        for c in [0, 1, 2]:
-            controls.columnconfigure(c, weight=1)
-
-        self.btn_forward.grid(row=0, column=1, sticky="nsew")
-        self.btn_left.grid(row=1, column=0, sticky="nsew")
-        self.btn_right.grid(row=1, column=2, sticky="nsew")
-        self.btn_backward.grid(row=1, column=1, sticky="nsew")
-
-        # ------------- Z Control -------------
-
-        z_step_label = Label(
-            self.manual_control_panel,
-            text="Z Step Size (µm):",
-            bg="white",
-            fg="black",
-            width=15,
-            anchor="e"
-        )
-        z_step_label.place(relx=0.0, rely=0.0, x=label_x, y=345)
-
-        self.z_step_size_var = StringVar(value=str(self.z_step_size))
-        self.z_step_entry = ttk.Entry(
-            self.manual_control_panel,
-            textvariable=self.z_step_size_var,
-            width=8
-        )
-        self.z_step_entry.place(relx=0.0, rely=0.0, x=entry_x, y=345)
-
-        z_hold_speed_label = Label(
-            self.manual_control_panel,
-            text="Z Speed (µm/s):",
-            bg="white",
-            fg="black",
-            width=15,
-            anchor="e"
-        )
-        z_hold_speed_label.place(relx=0.0, rely=0.0, x=label_x, y=375)
-
-        self.z_hold_speed_var = StringVar(value=str(self.z_speed))
-        self.z_hold_speed_var.trace_add("write", self.on_speed_change_z)
-        self.z_hold_speed_entry = ttk.Entry(
-            self.manual_control_panel,
-            textvariable=self.z_hold_speed_var,
-            width=8
-        )
-        self.z_hold_speed_entry.place(relx=0.0, rely=0.0, x=entry_x, y=375)
-
-        z_label = Label(
-            self.manual_control_panel,
-            text="Z (µm):",
-            bg="white",
-            fg="black",
-            width=15,
-            anchor="e"
-        )
-        z_label.place(relx=0.0, rely=0.0, x=label_x, y=405)
-
-        self.z_coord_var = StringVar(value=str(z_pos))
-        self.z_coord_entry = ttk.Entry(
-            self.manual_control_panel,
-            textvariable=self.z_coord_var,
-            width=8
-        )
-        self.z_coord_entry.place(relx=0.0, rely=0.0, x=entry_x, y=405)
-
-        self.z_reset_button = ttk.Button(
-            self.manual_control_panel,
-            text="Set Z = 0",
-            style="Normal.TButton",
-            command=self.set_z_0
-        )
-        self.z_reset_button.place(relx=0.5, y=440, anchor="n")
-        self.buttons.append(self.z_reset_button)
-
-        self.z_move_to_button = ttk.Button(
-            self.manual_control_panel,
-            text="Move to Z",
-            style="Normal.TButton",
-            command=self.go_to_z_position
-        )
-        self.z_move_to_button.place(relx=0.5, y=475, anchor="n")
-        self.buttons.append(self.z_move_to_button)
-
-        self.Z_manual_control_button_panel = Frame(
-            self.manual_control_panel,
-            bg="white",
-            width=80, 
-            height=45 
-        )
-        self.Z_manual_control_button_panel.place(relx=0.5, x=0, y=510, anchor="n")
-        self.Z_manual_control_button_panel.pack_propagate(False)
-
-        z_controls = Frame(self.Z_manual_control_button_panel, bg="white")
-        z_controls.pack(expand=True, fill="both")
-
-        self.btn_up = ttk.Button(z_controls, text="▴", style="Arrow.TButton")
-        self.btn_down = ttk.Button(z_controls, text="▾", style="Arrow.TButton")
-
-        self.btn_up.bind("<ButtonPress-1>", self.on_press_up)
-        self.btn_up.bind("<ButtonRelease-1>", self.on_release_up)
-        self.btn_down.bind("<ButtonPress-1>", self.on_press_down)
-        self.btn_down.bind("<ButtonRelease-1>", self.on_release_down)
-
-        self.buttons.extend([self.btn_up, self.btn_down])
-
-        z_controls.rowconfigure(0, weight=1)
-        z_controls.columnconfigure(0, weight=1)
-        z_controls.columnconfigure(1, weight=1)
-
-        self.btn_up.grid(row=0, column=0, sticky="nsew")
-        self.btn_down.grid(row=0, column=1, sticky="nsew")
-
-        return self.manual_control_panel
     
     def init_capture_panel(self):
 
@@ -629,7 +373,7 @@ class App:
             self.capture_background,
             text="Save Image",
             style="Save.TButton",
-            command=self.save_image
+            command=self.frame_processor.save_image
         )
         self.capture_image_button.place(relx=0.5, y=55, anchor="center")
         self.buttons.append(self.capture_image_button)
@@ -638,7 +382,7 @@ class App:
             self.capture_background,
             text="Save Map",
             style="Save.TButton",
-            command=lambda: self.save_image(image=cv2.cvtColor(self.true_map, cv2.COLOR_RGB2BGR))
+            command=lambda: self.frame_processor.save_image(image=cv2.cvtColor(self.true_map, cv2.COLOR_RGB2BGR))
         )
         self.capture_map_button.place(relx=0.5, y=90, anchor="center")
         self.buttons.append(self.capture_map_button)
@@ -996,191 +740,7 @@ class App:
         self.view_scans_panel.config(height=new_height)
         self.view_scans_background.config(height=new_height - 2)
 
-    # ------------- Stage/Objective Control Functions -------------
-
-    # XY Control Functions
-
-    def set_origin(self):
-        pc.set_origin()
-        self.get_position()
-
-    def go_to_position(self, x=None, y=None):
-        self.disable_buttons()
-        if x is not None and y is not None:
-            pc.go_to_pos(x, y)
-        else:
-            pc.go_to_pos(int(self.x_coord_var.get()), int(self.y_coord_var.get()))
-        self.get_position()
-        self.enable_buttons()
-
-    def get_position(self):
-        global x_pos, y_pos, z_pos
-        x_pos, y_pos, z_pos = pc.get_curr_pos()
-        self.x_coord_var.set(str(x_pos))
-        self.y_coord_var.set(str(y_pos))
-        self.z_coord_var.set(str(z_pos))
-
-    def start_hold_forward(self):
-        self.is_hold = True
-        pc.start_forward_y_motor()
-
-    def on_press_forward(self, event):
-        self.is_hold = False
-        self.hold_job = self.root.after(200, self.start_hold_forward)
-
-    def on_release_forward(self, event):
-
-        if self.hold_job is not None:
-            self.root.after_cancel(self.hold_job)
-
-        if self.is_hold:
-            pc.stop_y_motor()   # stop continuous motion
-        else:
-            global y_pos
-            y_pos -= int(self.xy_step_entry.get())
-            pc.go_to_pos(x_pos, y_pos)
-
-        self.get_position()
-
-    def start_hold_backward(self):
-        self.is_hold = True
-        pc.start_backward_y_motor()
-
-    def on_press_backward(self, event):
-        self.is_hold = False
-        self.hold_job = self.root.after(200, self.start_hold_backward)
-
-    def on_release_backward(self, event):
-    
-        if self.hold_job is not None:
-            self.root.after_cancel(self.hold_job)
-    
-        if self.is_hold:
-            pc.stop_y_motor()
-        else:
-            global y_pos
-            y_pos += int(self.xy_step_entry.get())
-            pc.go_to_pos(x_pos, y_pos)
-
-        self.get_position()
-
-    def start_hold_left(self):
-        self.is_hold = True
-        pc.start_forward_x_motor()
-
-    def on_press_left(self, event):
-        self.is_hold = False
-        self.hold_job = self.root.after(200, self.start_hold_left)
-
-    def on_release_left(self, event):
-    
-        if self.hold_job is not None:
-            self.root.after_cancel(self.hold_job)
-    
-        if self.is_hold:
-            pc.stop_x_motor()
-        else:
-            global x_pos
-            x_pos += int(self.xy_step_entry.get())
-            pc.go_to_pos(x_pos, y_pos)
-
-        self.get_position()
-
-    def start_hold_right(self):
-        self.is_hold = True
-        pc.start_backward_x_motor()
-
-    def on_press_right(self, event):
-        self.is_hold = False
-        self.hold_job = self.root.after(200, self.start_hold_right)
-
-    def on_release_right(self, event):
-    
-        if self.hold_job is not None:
-            self.root.after_cancel(self.hold_job)
-    
-        if self.is_hold:
-            pc.stop_x_motor()
-        else:
-            global x_pos
-            x_pos -= int(self.xy_step_entry.get())
-            pc.go_to_pos(x_pos, y_pos)
-
-        self.get_position()
-
-    def on_speed_change_xy(self, *args):
-        try:
-            speed = int(self.xy_speed_var.get())
-            pc.set_velocity(speed)
-        except ValueError:
-            pass
-
-    # Z Control Functions
-
-    def set_z_0(self):
-        pc.set_z_0()
-        self.get_position()
-
-    def go_to_z_position(self, z=None):
-        self.disable_buttons()
-        global z_pos
-        if z is not None:
-            pc.go_to_z_pos(z)
-        else:
-            pc.go_to_z_pos(int(self.z_coord_var.get()))
-        self.get_position()
-        self.enable_buttons()
-
-    def start_hold_up(self):
-        self.is_hold = True
-        pc.start_backward_z_motor()
-
-    def on_press_up(self, event):
-        self.is_hold = False
-        self.hold_job = self.root.after(200, self.start_hold_up)
-
-    def on_release_up(self, event):
-    
-        if self.hold_job is not None:
-            self.root.after_cancel(self.hold_job)
-    
-        if self.is_hold:
-            pc.stop_z_motor()
-        else:
-            global z_pos
-            z_pos -= int(self.z_step_entry.get())
-            pc.go_to_z_pos(z_pos)
-
-        self.get_position()
-
-    def start_hold_down(self):
-        self.is_hold = True
-        pc.start_forward_z_motor()
-
-    def on_press_down(self, event):
-        self.is_hold = False
-        self.hold_job = self.root.after(200, self.start_hold_down)
-
-    def on_release_down(self, event):
-    
-        if self.hold_job is not None:
-            self.root.after_cancel(self.hold_job)
-    
-        if self.is_hold:
-            pc.stop_z_motor()
-        else:
-            global z_pos
-            z_pos += int(self.z_step_entry.get())
-            pc.go_to_z_pos(z_pos)
-
-        self.get_position()
-
-    def on_speed_change_z(self, *args):
-        try:
-            speed = int(self.z_speed_var.get())
-            pc.set_z_velocity(speed)
-        except ValueError:
-            pass
+    # ------------- Objective Control Functions -------------
 
     def change_objective(self, position):
 
@@ -1314,9 +874,6 @@ class App:
         print(f"Time taken: {time.time() - start_time:.2f}s")
         self.enable_buttons()
 
-    def stop_all_motors(self):
-        pc.stop_all_motors()
-
     # ------------- Scanning Functions -------------
 
     def run_complete_scan(self, window=(3, 3)):
@@ -1408,12 +965,12 @@ class App:
 
             pc.wait_until_not_busy()
 
-            img = self.capture_frame()
+            img = self.frame_processor.capture_frame()
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
             image_path = path / "Raw" / f"img_2x_{i}.png"
             image_path.parent.mkdir(parents=True, exist_ok=True)
-            self.save_image(image=img, filename=image_path)
+            self.frame_processor.save_image(image=img, filename=image_path)
 
             binary = chip_edge_classifier.chip_filter(img, display=False)
             img_binary_rgb = cv2.cvtColor(binary, cv2.COLOR_GRAY2RGB)
@@ -1480,7 +1037,7 @@ class App:
             x, y, _ = pc.get_curr_pos()
             scan_coordinates_10x = [[x, y, 10, 10]]
 
-        cropped_flatfield = self.crop_frame(FLATFIELD_IMG)
+        cropped_flatfield = self.frame_processor.crop_frame(FLATFIELD_IMG)
 
         i = 0
         for coordinates in scan_coordinates_10x:
@@ -1522,13 +1079,13 @@ class App:
 
                 pc.wait_until_not_busy()
 
-                img = self.capture_frame()
+                img = self.frame_processor.capture_frame()
                 img = vignetting_corrector.vignetting_correction_direct_single_channel(img, cropped_flatfield, reference_point=(img.shape[1]//2, img.shape[0]//2))
                 img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
                 image_path = path / f"Chip {i} ({center_x}, {center_y})" / "Raw" / f"img_10x_{j}.png"
                 image_path.parent.mkdir(parents=True, exist_ok=True)
-                self.save_image(image=img, filename=image_path)
+                self.frame_processor.save_image(image=img, filename=image_path)
 
                 if image_queue is not None:
                     image_queue.put(image_path)
@@ -1711,13 +1268,13 @@ class App:
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             scanned_img, _, save = fi.identify_flakes_flake_model(img)
             out_path = img_path.parent.parent / "Processed" / img_path.name
-            self.save_image(cv2.cvtColor(scanned_img, cv2.COLOR_RGB2BGR), save_dir=out_path.parent, filename=out_path.name)
+            self.frame_processor.save_image(cv2.cvtColor(scanned_img, cv2.COLOR_RGB2BGR), save_dir=out_path.parent, filename=out_path.name)
             if save:
                 chip_folder = img_path.parent.parent
                 scan_root = chip_folder.parent.parent.parent        
                 flakes_dir = scan_root / "Flakes Found" / chip_folder.name
                 flakes_dir.mkdir(parents=True, exist_ok=True)       
-                self.save_image(cv2.cvtColor(scanned_img, cv2.COLOR_RGB2BGR), save_dir=flakes_dir, filename=img_path.name)
+                self.frame_processor.save_image(cv2.cvtColor(scanned_img, cv2.COLOR_RGB2BGR), save_dir=flakes_dir, filename=img_path.name)
             image_queue.task_done()
 
     # ------------- View Scan Functions -------------
@@ -2045,219 +1602,12 @@ class App:
 
         self.root.focus_set()
 
-    # ------------- Camera Handling -------------
-
-    @staticmethod
-    def cameraCallback(nEvent, ctx):
-        if nEvent == amcam.AMCAM_EVENT_IMAGE:
-            ctx.on_image()
-
-    def on_image(self):
-        #print(f"New Frame Time: {time.time()-self.start_camera_frame_timer}")
-        #self.start_camera_frame_timer = time.time()
-        try:
-            self.hcam.PullImageV2(self.buf, 24, None)
-
-            row_bytes = ((self.width * 24 + 31) // 32 * 4)
-            img = np.frombuffer(self.buf, dtype=np.uint8).reshape(self.height, row_bytes)
-            img = img[:, :self.width * 3].reshape(self.height, self.width, 3)
-            img = cv2.flip(img, -1)
-            self.current_frame = img.copy()
-            self.frame_id += 1
-
-            self.frame_buffer.append(self.current_frame)
-    
-            if self.view_mode == "Map": return
-            
-            if self.view_mode == "Camera View" and not self.scan_running:
-                if self.filter_var.get():
-                    self.display_image(cv2.cvtColor(chip_edge_classifier.chip_filter(img), cv2.COLOR_GRAY2RGB))
-                else:
-                    self.display_image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-    
-            self.find_sharpness(self.current_frame)
-
-        except amcam.HRESULTException as ex:
-            print("Camera error:", ex)
-
-    def crop_frame(self, frame):
-
-        h, w = frame.shape[:2]
-
-        if self.magnification == "2x":
-            crop_w = int(w * CENTER_CROP_WIDTH_RATIO_2X)
-            crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_2X)
-
-        elif self.magnification == "10x":
-            crop_w = int(w * CENTER_CROP_WIDTH_RATIO_10X)
-            crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_10X)
-
-        cx, cy = w // 2, h // 2
-
-        x1 = cx - crop_w // 2
-        y1 = cy - crop_h // 2
-        x2 = cx + crop_w // 2
-        y2 = cy + crop_h // 2
-
-        return frame[y1:y2, x1:x2]
-
-    def run_camera(self):
-        cams = amcam.Amcam.EnumV2()
-        if not cams:
-            print("No camera found")
-            return
-
-        self.hcam = amcam.Amcam.Open(cams[0].id)
-
-        self.hcam.put_eSize(1)
-
-        self.frame_buffer = deque(maxlen=5)
-
-        '''
-        self.hcam.put_AutoExpoEnable(True)
-        self.hcam.put_AutoExpoTarget(DEFAULT_EXPOSURE)
-        '''
-        
-        self.reset_camera_settings(self.hcam)
-
-        self.width, self.height = self.hcam.get_Size()
-        bufsize = ((self.width * 24 + 31) // 32 * 4) * self.height
-        self.buf = bytes(bufsize)
-
-        self.frame_id = 0
-
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-
-        scale = min(screen_width / self.width, screen_height / self.height, 1.0)
-        win_width = int(self.width * scale)
-        win_height = int(self.height * scale)
-        self.root.geometry(f"{win_width}x{win_height}")
-
-        self.root.update_idletasks()
-        self.root.update()
-
-        self.hcam.StartPullModeWithCallback(self.cameraCallback, self)
-
-        self.start_camera_frame_timer = 0
-
-        num_res = self.hcam.ResolutionNumber()
-        for i in range(num_res):
-            print(f"Resolution {i}: {self.hcam.get_Resolution(i)}")
-
-        width, height = self.hcam.get_Size()
-        print(f"Current Resolution: ({width}, {height})")
-        
-        max_speed = self.hcam.MaxSpeed()
-        self.hcam.put_Speed(max_speed)
-
-    # image should be in BGR
-    def save_image(self, image=None, save_dir=None, filename=None, output=False):
-        if image is None:
-            if not hasattr(self, "current_frame") or self.current_frame is None:
-                print("No frame available to save.")
-                return
-            image = self.current_frame
-
-        if save_dir is None:
-            save_dir = home_dir / "Saved Images"
-        else:
-            save_dir = Path(save_dir)
-
-        save_dir.mkdir(parents=True, exist_ok=True)
-
-        if filename is None:
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            filepath = save_dir / f"image_{timestamp}.png"
-        else:
-            filepath = save_dir / filename
-
-        cv2.imwrite(str(filepath), image)
-
-        if output:
-            print(f"Image saved to {filepath}")
-
-    def wait_until_new_frame(self):
-        old_frame = self.frame_id
-        start = time.time()
-        while self.frame_id == old_frame:
-            self.root.update()
-            time.sleep(0.005)
-            if time.time() - start > 1:
-                print("Frame timeout")
-                break
-
-    def capture_frame(self, num_images=2):
-        self.wait_until_new_frame()
-
-        sum_frame = np.zeros_like(self.current_frame, dtype=np.float32)
-
-        for _ in range(num_images):
-            self.wait_until_new_frame()
-            sum_frame += self.frame_buffer[-1].astype(np.float32)
-
-        avg_frame = (sum_frame / num_images).astype(self.frame_buffer[-1].dtype)
-
-        h, w = avg_frame.shape[:2]
-        if self.magnification == "2x":
-            crop_w = int(w * CENTER_CROP_WIDTH_RATIO_2X)
-            crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_2X)
-        elif self.magnification == "10x":
-            crop_w = int(w * CENTER_CROP_WIDTH_RATIO_10X)
-            crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_10X)
-        cx, cy = w // 2, h // 2
-
-        x1 = cx - crop_w // 2
-        y1 = cy - crop_h // 2
-        x2 = cx + crop_w // 2
-        y2 = cy + crop_h // 2
-
-        cropped_frame = avg_frame[y1:y2, x1:x2]
-
-        return cropped_frame
-    
-    def capture_frame_raw(self, num_images=2):
-        self.wait_until_new_frame()
-
-        sum_frame = np.zeros_like(self.current_frame, dtype=np.float32)
-
-        for _ in range(num_images):
-            self.wait_until_new_frame()
-            sum_frame += self.current_frame.astype(np.float32)
-
-        avg_frame = (sum_frame / num_images).astype(self.current_frame.dtype)
-
-        return avg_frame
-
-    def reset_camera_settings(self, cam):
-        cam.put_AutoExpoEnable(False)
-
-        cam.put_ExpoTime(1500)
-        cam.put_ExpoAGain(100)
-
-        cam.put_Option(amcam.AMCAM_OPTION_RAW, 0)
-
-        cam.put_Option(amcam.AMCAM_OPTION_COLORMATIX, 1)
-        cam.put_Option(amcam.AMCAM_OPTION_LINEAR, 1)
-        cam.put_Option(amcam.AMCAM_OPTION_CURVE, 1)
-
-        cam.put_Option(amcam.AMCAM_OPTION_SHARPENING, 0)
-        cam.put_Option(amcam.AMCAM_OPTION_DENOISE, 0)
-        cam.put_Option(amcam.AMCAM_OPTION_DEFECT_PIXEL, 1)
-
-        cam.put_Brightness(0)
-        cam.put_Contrast(0)
-        cam.put_Gamma(100)
-        cam.put_Saturation(128)
-
     def on_close(self):
-        self.hcam = None
-        self.buf = None
-        pc.disconnect()
+        self.frame_processor.close()
+        self.stage.disconnect()
         self.root.destroy()
 
 if __name__ == "__main__":
     root = Tk()
     app = App(root)
-    app.run_camera()
     root.mainloop()
