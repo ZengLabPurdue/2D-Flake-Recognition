@@ -1,5 +1,3 @@
-# controllers/stage_manager.py
-
 from ctypes import WinDLL, create_string_buffer
 import os
 import sys
@@ -32,8 +30,6 @@ class StageController:
 
         self._connect()
         self.initialize_stage()
-
-    # ---------------- Connection / Command Layer ----------------
 
     def _connect(self):
         print("Starting prior controller...")
@@ -88,8 +84,6 @@ class StageController:
         self.set_z_velocity(self.z_velocity)
 
         print("Prior controller setup complete!")
-
-    # ---------------- Busy / Safety ----------------
 
     def is_busy(self):
         stage_busy = self.cmd("controller.stage.busy.get")[1]

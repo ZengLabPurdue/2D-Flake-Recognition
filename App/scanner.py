@@ -25,7 +25,10 @@ from pathlib import Path
 from Hardware.stage_controller import StageController
 from UI.panels.stage_control_panel import StageControlPanel
 from UI.panels.objective_panel import ObjectiveControlPanel
+from UI.panels.focus_panel import FocusPanel
+from UI.panels.scan_info_panel import ScanInfoPanel
 from Imaging.frame_processing import FrameProcessor
+from Imaging.focus import FocusController
 
 home_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 parent_dir = home_dir.parent
@@ -103,20 +106,11 @@ class App:
 
         self.scan_running = False
 
-        self.hold_job = None
-        self.is_hold = False
-
         self.hcam = None
-        self.buf = None
-        self.prevImg = None
         self.width = 0
         self.height = 0
         
         self.magnification = "2x"
-
-        self.auto_focus_range = 1000
-        self.auto_focus_accuracy = 10
-        self.auto_focus_steps = 20
 
         self.view_chip_index = 0
         self.view_image_index = 0
@@ -126,9 +120,11 @@ class App:
         self.buttons = []
         self.panels = []
 
+        self.scan_info_panel = ScanInfoPanel(parent=self.main_frame)
+        
         self.panels.append({
             "name": "Info Panel",
-            "frame": self.init_scan_info_panel(),
+            "frame": self.scan_info_panel.frame,
             "var": BooleanVar(value=False)
         })
 
@@ -152,6 +148,13 @@ class App:
             enable_buttons=self.enable_buttons,
         )
         self.frame_processor.run_camera()
+
+        self.focus_controller = FocusController(
+            stage=self.stage,
+            frame_processor=self.frame_processor,
+            disable_buttons=self.disable_buttons,
+            enable_buttons=self.enable_buttons,
+        )
 
         self.stage_control_panel = StageControlPanel(
             parent=self.main_frame,
@@ -186,7 +189,7 @@ class App:
             turret=self.turret,
             get_magnification=lambda: self.magnification,
             set_magnification=self.set_magnification,
-            auto_focus=self.auto_focus,
+            auto_focus=self.focus_controller.auto_focus,
             disable_buttons=self.disable_buttons,
             enable_buttons=self.enable_buttons,
             register_button=self.buttons.append,
@@ -198,9 +201,17 @@ class App:
             "var": BooleanVar(value=False)
         })
 
+        self.focus_panel = FocusPanel(
+            parent=self.main_frame,
+            focus_controller=self.focus_controller,
+            register_button=self.buttons.append,
+        )
+
+        self.focus_controller.sharpness_callback = self.focus_panel.update_sharpness
+
         self.panels.append({
             "name": "Focus Panel",
-            "frame": self.init_focus_panel(),
+            "frame": self.focus_panel.frame,
             "var": BooleanVar(value=False)
         })
 
@@ -274,75 +285,6 @@ class App:
 
     # Panel Initialization 
 
-    def init_scan_info_panel(self):
-
-        self.scan_info_panel = Frame(
-            self.main_frame,
-            bg="#f0f0f0",
-            width=204,
-            height=147
-        )
-        self.scan_info_panel.place(relx=1.0, rely=0.0, anchor="ne")
-
-        self.info_background = Frame(
-            self.scan_info_panel,
-            bg="white",
-            width=200,
-            height=145
-        )
-        self.info_background.place(x=2, y=0)
-
-        title_label = Label(
-            self.scan_info_panel,
-            text="Info",
-            bg="white",
-            fg="black",
-            font=("TkDefaultFont", 13)
-        )
-        title_label.place(relx=0.5, y=10, anchor="n")
-
-        self.scan_info_type_label = Label(
-            self.scan_info_panel,
-            text=f"Scan: None",
-            bg="white",
-            fg="black"
-        )
-        self.scan_info_type_label.place(relx=0.5, y=35, anchor="n")
-
-        self.scan_info_stage_label = Label(
-            self.scan_info_panel,
-            text="Stage: Not Started",
-            bg="white",
-            fg="black"
-        )
-        self.scan_info_stage_label.place(relx=0.5, y=55, anchor="n")
-
-        self.scan_info_progress_label = Label(
-            self.scan_info_panel,
-            text="Progress: Not Started",
-            bg="white",
-            fg="black"
-        )
-        self.scan_info_progress_label.place(relx=0.5, y=75, anchor="n")
-
-        self.scan_info_stage_time_label = Label(
-            self.scan_info_panel,
-            text="Stage Time Elapsed: Not Started",
-            bg="white",
-            fg="black"
-        )
-        self.scan_info_stage_time_label.place(relx=0.5, y=95, anchor="n")
-
-        self.scan_info_total_time_label = Label(
-            self.scan_info_panel,
-            text="Total Time Elapsed: Not Started",
-            bg="white",
-            fg="black"
-        )
-        self.scan_info_total_time_label.place(relx=0.5, y=115, anchor="n")
-
-        return self.scan_info_panel
-    
     def init_capture_panel(self):
 
         self.capture_panel = Frame(
@@ -445,109 +387,7 @@ class App:
         self.exposure_value_label.place(relx=0.5, y=70, anchor="n")
 
         return self.adjust_exposure_panel
-
-    def init_focus_panel(self):
-        self.focus_panel = Frame(
-            self.main_frame,
-            bg="#f0f0f0",
-            width=204,
-            height=205
-        )
-        self.focus_panel.place(relx=1.0, rely=0.0, anchor="ne")
-
-        self.focus_background = Frame(
-            self.focus_panel,
-            bg="white",
-            width=200,
-            height=203
-        )
-        self.focus_background.place(x=2, y=0)
-
-        focus_title = Label(
-            self.focus_panel,
-            text="Focus Control",
-            bg="white",
-            fg="black",
-            font=("TkDefaultFont", 13)
-        )
-        focus_title.place(relx=0.5, y=5, anchor="n")
-
-        self.sharpness_var = tk.StringVar()
-        self.sharpness_var.set("Sharpness: Unknown")
-
-        self.sharpness_label = Label(
-            self.focus_panel,
-            textvariable=self.sharpness_var,
-            bg="white",
-            fg="black",
-            font="TkDefaultFont"
-        )
-
-        self.sharpness_label.place(relx=0.5, y=35, anchor="n")
-
-        label_x = 10
-        entry_x = 130
-
-        range_label = Label(
-            self.focus_panel,
-            text="Range:",
-            bg="white",
-            fg="black",
-            width=15,
-            anchor="e"
-        )
-        range_label.place(relx=0.0, rely=0.0, x=label_x, y=65)
-
-        self.auto_focus_range_var = StringVar(value=str(self.auto_focus_range))
-        self.auto_focus_range_entry = ttk.Entry(
-            self.focus_panel,
-            textvariable=self.auto_focus_range_var,
-            width=8
-        )
-        self.auto_focus_range_entry.place(relx=0.0, rely=0.0, x=entry_x, y=65)
-
-        accuracy_label = Label(
-            self.focus_panel,
-            text="Accuracy:",
-            bg="white",
-            fg="black",
-            width=15,
-            anchor="e"
-        )
-        accuracy_label.place(relx=0.0, rely=0.0, x=label_x, y=95)
-
-        self.auto_focus_accuracy_var = StringVar(value=str(self.auto_focus_accuracy))
-        self.auto_focus_accuracy_entry = ttk.Entry(
-            self.focus_panel,
-            textvariable=self.auto_focus_accuracy_var,
-            width=8
-        )
-        self.auto_focus_accuracy_entry.place(relx=0.0, rely=0.0, x=entry_x, y=95)
-
-        step_label = Label(
-            self.focus_panel,
-            text="Num Steps:",
-            bg="white",
-            fg="black",
-            width=15,
-            anchor="e"
-        )
-        step_label.place(relx=0.0, rely=0.0, x=label_x, y=125)
-
-        self.auto_focus_steps_var = StringVar(value=str(self.auto_focus_steps))
-        self.auto_focus_steps_entry = ttk.Entry(
-            self.focus_panel,
-            textvariable=self.auto_focus_steps_var,
-            width=8
-        )
-        self.auto_focus_steps_entry.place(relx=0.0, rely=0.0, x=entry_x, y=125)
-
-        self.auto_focus_btn = ttk.Button(self.focus_panel, text="Auto Focus", style="Normal.TButton", command=lambda: self.auto_focus(start_range=int(self.auto_focus_range_var.get()), accuracy=int(self.auto_focus_accuracy_var.get()), steps=int(self.auto_focus_steps_var.get())))
-        self.auto_focus_btn.place(relx=0.5, y=160, anchor="n")
-        self.buttons.append(self.auto_focus_btn)
-
-        return self.focus_panel
-    
+ 
     def init_view_scans_panel(self):
 
         self.pos_scan_name = 40
@@ -654,99 +494,6 @@ class App:
 
         self.view_scans_panel.config(height=new_height)
         self.view_scans_background.config(height=new_height - 2)
-
-    # ------------- Objective Control Functions -------------
-
-    def find_sharpness(self, image):
-
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-        gray = cv2.GaussianBlur(gray, (3,3), 0)
-
-        sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
-
-        self.sharpness_var.set(f"Sharpness: {sharpness:.3f}")
-
-        return sharpness
-
-    def get_raw_sharpness(self, num_images=2):
-        self.wait_until_new_frame()
-
-        sharpness = 0
-
-        for _ in range(num_images):
-            self.wait_until_new_frame()
-            sharpness += self.find_sharpness(self.current_frame)
-
-        sharpness /= num_images
-
-        return sharpness
-
-    def discard_initial_frame(self, position):
-        discard_z = position
-        self.stage.go_to_z_pos(discard_z)
-        self.get_position()
-        self.get_raw_sharpness(num_images=3)
-
-    def find_best_focus(self, z_start, z_end, steps, tolerance=0.2):
-
-        best_sharpness = -1
-        best_z = z_start
-
-        z_positions = [
-            z_start + i * (z_end - z_start) / steps
-            for i in range(steps + 1)
-        ]
-
-        print(f"Speed: {self.stage.get_z_velocity()}, Step: {int((z_end - z_start) / steps)}")
-        #self.stage.set_velocity(int((z_end - z_start) / steps))
-        
-        curr_z = self.stage.get_curr_z_pos()
-
-        if abs(curr_z - z_positions[0]) < abs(curr_z - z_positions[-1]):
-            z_positions.reverse()
-
-        self.discard_initial_frame(z_positions[0])
-
-        for z in z_positions:
-
-            self.stage.go_to_z_pos(z)
-            self.get_position()
-
-            sharpness = self.get_raw_sharpness(num_images=3)
-
-            print(f"Z: {z:>12.1f} | Sharpness: {sharpness:>8.3f} | Best Sharpness: {best_sharpness:>8.3f} | Best Z: {best_z:>12.1f}")
-
-            if sharpness > best_sharpness:
-                best_sharpness = sharpness
-                best_z = z
-                drops = 0
-            else:
-                if sharpness < best_sharpness - tolerance:
-                    drops += 1
-
-            if drops >= 2:
-                print("Focus peak passed")
-                break
-
-        self.stage.go_to_z_pos(best_z)
-
-        return best_z
-
-    def auto_focus(self, start_range=3000, accuracy=50, steps=20):
-        start_time = time.time()
-        self.disable_buttons()
-        _range = start_range
-        best_z = self.stage.get_curr_z_pos()
-        while _range >= accuracy:
-            best_z = self.find_best_focus(best_z-_range, best_z+_range, steps)
-            self.stage.go_to_z_pos(best_z)
-            self.discard_initial_frame(best_z)
-            print(f"Best Z: {best_z:>12.1f} | Sharpness: {self.get_raw_sharpness(num_images=3):>8.3f} | Range: {_range}")
-            print("-----------------------------------")
-            _range = int(_range / (steps / 2))
-        print(f"Time taken: {time.time() - start_time:.2f}s")
-        self.enable_buttons()
 
     def set_magnification(self, magnification):
         self.magnification = magnification
@@ -911,7 +658,7 @@ class App:
             path = scan_path / "All Images" / "10x"
 
         if scan_coordinates_10x is None:
-            x, y, _ = self.stage.get_curr_pos()
+            x, y, _ = self.stage.get_position()
             scan_coordinates_10x = [[x, y, 10, 10]]
 
         cropped_flatfield = self.frame_processor.crop_frame(FLATFIELD_IMG)
@@ -937,7 +684,7 @@ class App:
 
             coords, total_frames = self.generate_rect_coords(coordinates[2], coordinates[3])
 
-            pc.go_to_pos(center_x, center_y)
+            self.stage.move_to_pos(center_x, center_y)
 
             max_zoom = max(zoom, int(self.hcam.get_Size()[1] / (self.true_map.shape[0] / coordinates[2])), int(self.hcam.get_Size()[0] / (self.true_map.shape[1] / coordinates[3])))
 
@@ -1114,25 +861,6 @@ class App:
             step += 1
 
         return spiral_coords, total_frames
-
-    def update_scan_status(self, scan_type=None, stage=None, progress=None, stage_elapsed_time=None, total_elapsed_time=None):
-        if scan_type is not None:
-            self.scan_info_type_label.config(text=f"Scan: {scan_type}")
-    
-        if stage is not None:
-            self.scan_info_stage_label.config(text=f"Stage: {stage}")
-
-        if progress is not None:
-            self.scan_info_progress_label.config(text=f"Stage Progress: {progress}")
-
-        if stage_elapsed_time is not None:
-            self.scan_info_stage_time_label.config(text=f"Stage Time Elapsed: {stage_elapsed_time}")
-
-        if total_elapsed_time is not None:
-            self.scan_info_total_time_label.config(text=f"Total Time Elapsed: {total_elapsed_time}")
-
-        self.display_map()
-        self.scan_info_panel.update()
 
     # ------------- Flake Detection -------------
 

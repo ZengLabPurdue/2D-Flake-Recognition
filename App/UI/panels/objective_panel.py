@@ -150,14 +150,14 @@ class ObjectiveControlPanel:
             if position == current_position:
                 return
 
-            current_z = self.stage.get_curr_z_pos()
+            current_z = self.stage.get_z_position()
 
             _, current_rel_z = objective_map.get(current_position, (None, 0))
             magnification, target_rel_z = objective_map.get(position, (None, 0))
 
             change_z = target_rel_z - current_rel_z
 
-            self.stage.go_to_z_pos(current_z + change_z)
+            self.stage.move_to_z(current_z + change_z)
             self.turret.turn_to_position(position)
 
             if position == 1:

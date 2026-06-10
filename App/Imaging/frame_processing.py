@@ -59,8 +59,6 @@ class FrameProcessor:
         self.was_busy = False
         self.capture_after_move = False
 
-    # ---------------- Camera callback ----------------
-
     @staticmethod
     def cameraCallback(nEvent, ctx):
         if nEvent == amcam.AMCAM_EVENT_IMAGE:
@@ -101,8 +99,6 @@ class FrameProcessor:
 
         except amcam.HRESULTException as ex:
             print("Camera error:", ex)
-
-    # ---------------- Processing loop ----------------
 
     def start_processing_loop(self):
         self.last_used_capture_frame_id = -1
@@ -163,8 +159,6 @@ class FrameProcessor:
             print("Frame processing error:", ex)
 
         self.root.after(PROCESS_FRAME_RATE, self.process_frame)
-
-    # ---------------- Camera setup ----------------
 
     def run_camera(self):
         cams = amcam.Amcam.EnumV2()
@@ -274,8 +268,6 @@ class FrameProcessor:
         finally:
             self.enable_buttons()
 
-    # ---------------- Capture helpers ----------------
-
     def capture_frame(self, num_images=2):
         if len(self.frame_buffer) == 0:
             print("No frames available.")
@@ -372,8 +364,6 @@ class FrameProcessor:
         avg_frame = (sum_frame / count).astype(np.uint8)
         return avg_frame
 
-    # ---------------- Cropping ----------------
-
     def crop_frame(self, frame):
         h, w = frame.shape[:2]
 
@@ -404,8 +394,6 @@ class FrameProcessor:
 
         return frame[y1:y2, x1:x2]
 
-    # ---------------- Saving ----------------
-
     def save_image(self, image=None, save_dir=None, filename=None, output=True):
         if image is None:
             image = self.capture_frame_raw()
@@ -433,8 +421,6 @@ class FrameProcessor:
             print(f"Image saved to {filepath}")
 
         return filepath
-
-    # ---------------- Shutdown ----------------
 
     def close(self):
         try:
