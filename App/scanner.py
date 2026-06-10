@@ -24,6 +24,7 @@ from pathlib import Path
 
 from Hardware.stage_controller import StageController
 from UI.panels.stage_control_panel import StageControlPanel
+from UI.panels.objective_panel import ObjectiveControlPanel
 from Imaging.frame_processing import FrameProcessor
 
 home_dir = Path(os.path.dirname(os.path.abspath(__file__)))
@@ -33,7 +34,7 @@ sys.path.insert(0, str(parent_dir))
 sys.path.insert(0, str(parent_dir / "Flake Recognition"))
 
 from APIs.prior_api import Prior_Controller
-from APIs.turret_api import Turret_Controller
+from App.Hardware.turret_controller import TurretController
 import chip_edge_classifier
 import flake_identifier
 import flake_identifier_yolo
@@ -75,7 +76,6 @@ IMAGE_UM_PER_PIXEL_10X_MED = 0.76609 # um
 FLATFIELD_IMG = cv2.imread(str(home_dir / "Flatfields" / "flatfield_2x_med_smoothed.png"))
 
 try:
-    tc = Turret_Controller(TURRET_COM_PORT)
     fi = flake_identifier.Flake_Identifier()
 except Exception as e:
     print("Failed to connect to Prior Controller:", e)
@@ -133,6 +133,7 @@ class App:
         })
 
         self.stage = StageController(PRIOR_COM_PORT, DLL_PATH)
+        self.turret = TurretController(TURRET_COM_PORT)
         self.frame_processor = FrameProcessor(
             root=self.root,
             stage=self.stage,
@@ -167,14 +168,6 @@ class App:
             "var": BooleanVar(value=False)
         })
 
-        '''
-        self.panels.append({
-            "name": "Stage Control Panel",
-            "frame": self.init_stage_control_panel(),
-            "var": BooleanVar(value=False)
-        })
-        '''
-
         self.panels.append({
             "name": "Capture Panel",
             "frame": self.init_capture_panel(),
@@ -187,9 +180,21 @@ class App:
             "var": BooleanVar(value=False)
         })
 
+        self.objective_control_panel = ObjectiveControlPanel(
+            parent=self.main_frame,
+            stage=self.stage,
+            turret=self.turret,
+            get_magnification=lambda: self.magnification,
+            set_magnification=self.set_magnification,
+            auto_focus=self.auto_focus,
+            disable_buttons=self.disable_buttons,
+            enable_buttons=self.enable_buttons,
+            register_button=self.buttons.append,
+        )
+
         self.panels.append({
             "name": "Objective Control Panel",
-            "frame": self.init_objective_control_panel(),
+            "frame": self.objective_control_panel.frame,
             "var": BooleanVar(value=False)
         })
 
@@ -441,96 +446,6 @@ class App:
 
         return self.adjust_exposure_panel
 
-    def init_objective_control_panel(self):
-        self.objective_control_panel = Frame(
-            self.main_frame,
-            bg="#f0f0f0",
-            width=204,
-            height=240
-        )
-        self.objective_control_panel.place(relx=1.0, rely=0.0, anchor="ne")
-
-        self.objective_control_background = Frame(
-            self.objective_control_panel,
-            bg="white",
-            width=200,
-            height=238
-        )
-        self.objective_control_background.place(x=2, y=0)
-
-        objective_control_title = Label(
-            self.objective_control_panel,
-            text="Objective Control",
-            bg="white",
-            fg="black",
-            font=("TkDefaultFont", 13)
-        )
-        objective_control_title.place(relx=0.5, y=5, anchor="n")
-
-        self.objective_var = tk.StringVar()
-        self.objective_var.set("Objective: Unknown")
-
-        self.objective_label = Label(
-            self.objective_control_panel,
-            textvariable=self.objective_var,
-            bg="white",
-            fg="black",
-            font="TkDefaultFont"
-        )
-
-        self.objective_label.place(relx=0.5, y=40, anchor="n")
-
-        style = ttk.Style()
-        style.configure("Custom.Horizontal.TScale", background="white")
-
-        self.objective_control_button_panel = Frame(
-            self.objective_control_panel,
-            bg="white",
-            width=150,
-            height=150
-        )
-        self.objective_control_button_panel.place(x=26, y=70)
-        self.objective_control_button_panel.pack_propagate(False)
-
-        controls = Frame(self.objective_control_button_panel, bg="white")
-        controls.pack(expand=True, fill="both")
-
-        style = ttk.Style()
-        style.configure("Custom.TButton", font=("TkDefaultFont", 10), padding=5)
-        style.configure("Custom.TButton", background="white", relief="flat")
-        
-        self.btn1 = ttk.Button(controls, text="1", style="Custom.TButton")
-        self.btn2 = ttk.Button(controls, text="2", style="Custom.TButton")
-        self.btn3 = ttk.Button(controls, text="3", style="Custom.TButton")
-        self.btn4 = ttk.Button(controls, text="4", style="Custom.TButton")
-        self.btn5 = ttk.Button(controls, text="5", style="Custom.TButton")
-
-        self.objective_buttons = [self.btn1, self.btn2, self.btn3, self.btn4, self.btn5]
-
-        for r in range(3):
-            controls.rowconfigure(r, weight=1)
-        for c in range(2):
-            controls.columnconfigure(c, weight=1)
-
-        self.btn1.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
-        self.btn2.grid(row=0, column=1, sticky="nsew", padx=2, pady=2)
-        self.btn3.grid(row=1, column=0, sticky="nsew", padx=2, pady=2)
-        self.btn4.grid(row=1, column=1, sticky="nsew", padx=2, pady=2)
-        self.btn5.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=2, pady=2)
-
-        self.btn1.bind("<ButtonPress-1>", lambda e: self.change_objective(1))
-        self.btn2.bind("<ButtonPress-1>", lambda e: self.change_objective(2))
-        self.btn3.bind("<ButtonPress-1>", lambda e: self.change_objective(3))
-        self.btn4.bind("<ButtonPress-1>", lambda e: self.change_objective(4))
-        self.btn5.bind("<ButtonPress-1>", lambda e: self.change_objective(5))
-
-        #self.change_objective(1)
-
-        tc.turn_to_position(1)
-        self.objective_var.set(f"Objective: {1}")
-
-        return self.objective_control_panel
-
     def init_focus_panel(self):
         self.focus_panel = Frame(
             self.main_frame,
@@ -742,47 +657,6 @@ class App:
 
     # ------------- Objective Control Functions -------------
 
-    def change_objective(self, position):
-
-        objective_map = {
-            1: ("2x", RELATIVE_2X_Z),
-            2: ("10x", RELATIVE_10X_Z),
-            3: ("20x", RELATIVE_20X_Z),
-            4: (None, RELATIVE_20X_Z),
-            5: ("100x", RELATIVE_100X_Z),
-        }
-
-        current_position = tc.check_position()
-
-        if position == current_position:
-            return
-
-        current_z = pc.get_curr_z_pos()
-
-        _, current_rel_z = objective_map.get(current_position, (None, 0))
-        magnification, target_rel_z = objective_map.get(position, (None, 0))
-
-        change_z = target_rel_z - current_rel_z
-
-        pc.go_to_z_pos(current_z + change_z)
-        tc.turn_to_position(position)
-
-        if position == 1:
-            self.auto_focus()
-        elif position == 2:
-            #self.auto_focus(start_range=500, accuracy=10, steps=20)
-            pass
-        elif position == 3:
-            self.auto_focus(start_range=200, accuracy=5, steps=20)
-        elif position == 4:
-            #self.auto_focus(start_range=50, accuracy=2, steps=10)
-            pass
-
-        self.magnification = magnification
-        self.objective_var.set(f"Objective: {position}")
-
-        self.enable_buttons()
-
     def find_sharpness(self, image):
 
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -810,7 +684,7 @@ class App:
 
     def discard_initial_frame(self, position):
         discard_z = position
-        pc.go_to_z_pos(discard_z)
+        self.stage.go_to_z_pos(discard_z)
         self.get_position()
         self.get_raw_sharpness(num_images=3)
 
@@ -824,10 +698,10 @@ class App:
             for i in range(steps + 1)
         ]
 
-        print(f"Speed: {pc.get_z_velocity()}, Step: {int((z_end - z_start) / steps)}")
-        #pc.set_velocity(int((z_end - z_start) / steps))
+        print(f"Speed: {self.stage.get_z_velocity()}, Step: {int((z_end - z_start) / steps)}")
+        #self.stage.set_velocity(int((z_end - z_start) / steps))
         
-        curr_z = pc.get_curr_z_pos()
+        curr_z = self.stage.get_curr_z_pos()
 
         if abs(curr_z - z_positions[0]) < abs(curr_z - z_positions[-1]):
             z_positions.reverse()
@@ -836,7 +710,7 @@ class App:
 
         for z in z_positions:
 
-            pc.go_to_z_pos(z)
+            self.stage.go_to_z_pos(z)
             self.get_position()
 
             sharpness = self.get_raw_sharpness(num_images=3)
@@ -855,7 +729,7 @@ class App:
                 print("Focus peak passed")
                 break
 
-        pc.go_to_z_pos(best_z)
+        self.stage.go_to_z_pos(best_z)
 
         return best_z
 
@@ -863,16 +737,19 @@ class App:
         start_time = time.time()
         self.disable_buttons()
         _range = start_range
-        best_z = pc.get_curr_z_pos()
+        best_z = self.stage.get_curr_z_pos()
         while _range >= accuracy:
             best_z = self.find_best_focus(best_z-_range, best_z+_range, steps)
-            pc.go_to_z_pos(best_z)
+            self.stage.go_to_z_pos(best_z)
             self.discard_initial_frame(best_z)
             print(f"Best Z: {best_z:>12.1f} | Sharpness: {self.get_raw_sharpness(num_images=3):>8.3f} | Range: {_range}")
             print("-----------------------------------")
             _range = int(_range / (steps / 2))
         print(f"Time taken: {time.time() - start_time:.2f}s")
         self.enable_buttons()
+
+    def set_magnification(self, magnification):
+        self.magnification = magnification
 
     # ------------- Scanning Functions -------------
 
@@ -909,7 +786,7 @@ class App:
         print(f"Time taken: {time.time() - start_time:.2f}s")
 
         self.go_to_position(x = 0,  y = 0)
-        self.change_objective(1)
+        self.turret_controller.change_objective(1)
 
     def run_2x_scan(self, window=(3, 3), scan_path=None, zoom=6, full_scan=False, full_scan_start_time = None, full_zoom=False):
 
@@ -917,7 +794,7 @@ class App:
 
         print("2x scan running...")
 
-        self.change_objective(1)
+        self.turret_controller.change_objective(1)
 
         self.set_view("Map", True)
 
@@ -960,10 +837,10 @@ class App:
             target_x = center_x + offset_x * X_SIZE_2 * CENTER_CROP_WIDTH_RATIO_2X
             target_y = center_y - offset_y * Y_SIZE_2 * CENTER_CROP_HEIGHT_RATIO_2X
 
-            pc.go_to_pos(target_x, target_y)
+            self.stage.go_to_pos(target_x, target_y)
             x_pos, y_pos = target_x, target_y
 
-            pc.wait_until_not_busy()
+            self.stage.wait_until_not_busy()
 
             img = self.frame_processor.capture_frame()
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -1010,7 +887,7 @@ class App:
                 self.update_scan_status(progress=progress_percent, stage_elapsed_time=stage_elapsed_str, total_elapsed_time=stage_elapsed_str)
 
         self.scan_running = False
-        pc.go_to_pos(center_x, center_y)
+        self.stage.go_to_pos(center_x, center_y)
         print("2x scan imaging finished!")
         print("Time taken: {:.2f}s".format(time.time() - start_time))
 
@@ -1024,7 +901,7 @@ class App:
 
         self.set_view("Map", False)
 
-        self.change_objective(2)
+        self.turret_controller.change_objective(2)
 
         input("Press Enter to start 10x scan...")
 
@@ -1034,7 +911,7 @@ class App:
             path = scan_path / "All Images" / "10x"
 
         if scan_coordinates_10x is None:
-            x, y, _ = pc.get_curr_pos()
+            x, y, _ = self.stage.get_curr_pos()
             scan_coordinates_10x = [[x, y, 10, 10]]
 
         cropped_flatfield = self.frame_processor.crop_frame(FLATFIELD_IMG)
@@ -1074,10 +951,10 @@ class App:
                 target_x = center_x + offset_x * X_SIZE_10 * CENTER_CROP_WIDTH_RATIO_10X
                 target_y = center_y - offset_y * Y_SIZE_10 * CENTER_CROP_HEIGHT_RATIO_10X
 
-                pc.go_to_pos(target_x, target_y)
+                self.stage.go_to_pos(target_x, target_y)
                 x_pos, y_pos = target_x, target_y
 
-                pc.wait_until_not_busy()
+                self.stage.wait_until_not_busy()
 
                 img = self.frame_processor.capture_frame()
                 img = vignetting_corrector.vignetting_correction_direct_single_channel(img, cropped_flatfield, reference_point=(img.shape[1]//2, img.shape[0]//2))

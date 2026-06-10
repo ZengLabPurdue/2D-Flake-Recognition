@@ -11,7 +11,7 @@ ERROR_CODES = {
 
 NUM_OBJECTIVES = 5
 
-class Turret_Controller:
+class TurretController:
     """
     API class for controlling BX-REMCB turret controller
     """
@@ -26,10 +26,10 @@ class Turret_Controller:
         self.Usart = serial.Serial(
             port=f"COM{port}",
             baudrate=19200,                     # BX-REMCB default baudrate
-            bytesize=serial.EIGHTBITS,             # 8 data bits
-            parity=serial.PARITY_EVEN,             # Even parity
-            stopbits=serial.STOPBITS_TWO,          # 2 stop bits
-            timeout=1                             # 1 s read timeout
+            bytesize=serial.EIGHTBITS,          # 8 data bits
+            parity=serial.PARITY_EVEN,          # Even parity
+            stopbits=serial.STOPBITS_TWO,       # 2 stop bits
+            timeout=1                           # 1 s read timeout
         )
         
         '''
