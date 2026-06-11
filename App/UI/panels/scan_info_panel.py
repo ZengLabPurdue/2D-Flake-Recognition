@@ -91,13 +91,9 @@ class ScanInfoPanel:
             self.progress_label.config(text=f"Stage Progress: {progress}")
 
         if stage_elapsed_time is not None:
-            self.stage_time_label.config(
-                text=f"Stage Time Elapsed: {stage_elapsed_time}"
-            )
+            self.stage_time_label.config(text=f"Stage Time Elapsed: {stage_elapsed_time}")
 
         if total_elapsed_time is not None:
-            self.total_time_label.config(
-                text=f"Total Time Elapsed: {total_elapsed_time}"
-            )
+            self.total_time_label.config(text=f"Total Time Elapsed: {total_elapsed_time}")
 
         self.frame.update_idletasks()

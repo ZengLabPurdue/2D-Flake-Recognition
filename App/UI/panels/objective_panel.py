@@ -1,36 +1,26 @@
 import tkinter as tk
 from tkinter import ttk
 
-#TODO: Move into config file
-RELATIVE_2X_Z = 0
-RELATIVE_10X_Z = 1250
-RELATIVE_20X_Z = 4300
-RELATIVE_100X_Z = 4300
+import config
 
 class ObjectiveControlPanel:
     def __init__(
         self,
         parent,
-        stage,
+        stage_controller,
         turret,
+        turret_controller,
         get_magnification,
         set_magnification,
         auto_focus,
-        enable_buttons=None,
-        disable_buttons=None,
-        register_button=None,
     ):
         self.parent = parent
-        self.stage = stage
+        self.stage = stage_controller
         self.turret = turret
-
+        self.turret_controller = turret_controller
         self.get_magnification = get_magnification
         self.set_magnification = set_magnification
         self.auto_focus = auto_focus
-
-        self.enable_buttons = enable_buttons or (lambda: None)
-        self.disable_buttons = disable_buttons or (lambda: None)
-        self.register_button = register_button or (lambda btn: None)
 
         self.objective_var = tk.StringVar(value="Objective: Unknown")
 
@@ -125,57 +115,10 @@ class ObjectiveControlPanel:
         self.btn4.grid(row=1, column=1, sticky="nsew", padx=2, pady=2)
         self.btn5.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=2, pady=2)
 
-        self.btn1.bind("<ButtonPress-1>", lambda e: self.change_objective(1))
-        self.btn2.bind("<ButtonPress-1>", lambda e: self.change_objective(2))
-        self.btn3.bind("<ButtonPress-1>", lambda e: self.change_objective(3))
-        self.btn4.bind("<ButtonPress-1>", lambda e: self.change_objective(4))
-        self.btn5.bind("<ButtonPress-1>", lambda e: self.change_objective(5))
+        self.btn1.bind("<ButtonPress-1>", lambda e: self.turret_controller.change_objective(1))
+        self.btn2.bind("<ButtonPress-1>", lambda e: self.turret_controller.change_objective(2))
+        self.btn3.bind("<ButtonPress-1>", lambda e: self.turret_controller.change_objective(3))
+        self.btn4.bind("<ButtonPress-1>", lambda e: self.turret_controller.change_objective(4))
+        self.btn5.bind("<ButtonPress-1>", lambda e: self.turret_controller.change_objective(5))
 
         return panel
-
-    def change_objective(self, position):
-        objective_map = {
-            1: ("2x", RELATIVE_2X_Z),
-            2: ("10x", RELATIVE_10X_Z),
-            3: ("20x", RELATIVE_20X_Z),
-            4: (None, RELATIVE_20X_Z),
-            5: ("100x", RELATIVE_100X_Z),
-        }
-
-        self.disable_buttons()
-
-        try:
-            current_position = self.turret.check_position()
-
-            if position == current_position:
-                return
-
-            current_z = self.stage.get_z_position()
-
-            _, current_rel_z = objective_map.get(current_position, (None, 0))
-            magnification, target_rel_z = objective_map.get(position, (None, 0))
-
-            change_z = target_rel_z - current_rel_z
-
-            self.stage.move_to_z(current_z + change_z)
-            self.turret.turn_to_position(position)
-
-            if position == 1:
-                self.auto_focus()
-
-            elif position == 2:
-                # self.auto_focus(start_range=500, accuracy=10, steps=20)
-                pass
-
-            elif position == 3:
-                self.auto_focus(start_range=200, accuracy=5, steps=20)
-
-            elif position == 4:
-                # self.auto_focus(start_range=50, accuracy=2, steps=10)
-                pass
-
-            self.set_magnification(magnification)
-            self.objective_var.set(f"Objective: {position}")
-
-        finally:
-            self.enable_buttons()

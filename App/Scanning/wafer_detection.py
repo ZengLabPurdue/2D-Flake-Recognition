@@ -1,12 +1,10 @@
-import math
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib import cm
 from tkinter import filedialog
 from scipy.signal import find_peaks
 
-def chip_filter(image, threshold=None, sample=30, display=False):
+def wafer_filter(image, threshold=None, sample=30, display=False):
 
     if (display):
         plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
@@ -85,11 +83,25 @@ def threshold_after_highest_peak(hist, smoothing=30, min_prominence=0.05, displa
 
     return threshold
 
+def find_wafers(self, filter_map, true_map):
+    binary_map = (filter_map > 0).astype("uint8") * 255
+    contours, _ = cv2.findContours(binary_map, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    filtered_contours = [c for c in contours if cv2.contourArea(c) >= 1000]
+    
+    wafers = []
+    
+    for _, contour in enumerate(filtered_contours):
+        x, y, w, h = cv2.boundingRect(contour)
+        wafers.append((x,y,w,h))
+        cv2.rectangle(true_map, (x, y), (x+w, y+h), (255,255,0), 5)
+    return wafers, true_map
+
 if __name__ == "__main__":
     image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
     image = cv2.imread(image_path, cv2.IMREAD_COLOR)
     gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    plt.imshow(cv2.cvtColor(chip_filter(image, display=True), cv2.COLOR_GRAY2RGB))
+    plt.imshow(cv2.cvtColor(wafer_filter(image, display=True), cv2.COLOR_GRAY2RGB))
     plt.axis("off")
     plt.show()

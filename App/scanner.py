@@ -22,6 +22,8 @@ from PIL import Image, ImageTk
 
 from pathlib import Path
 
+import config
+from Scanning.scan_manager import ScanManager
 from Hardware.stage_controller import StageController
 from UI.panels.stage_control_panel import StageControlPanel
 from UI.panels.objective_panel import ObjectiveControlPanel
@@ -36,47 +38,13 @@ parent_dir = home_dir.parent
 sys.path.insert(0, str(parent_dir))
 sys.path.insert(0, str(parent_dir / "Flake Recognition"))
 
-from APIs.prior_api import Prior_Controller
+from App.Hardware.turret_api import turret
 from App.Hardware.turret_controller import TurretController
-import chip_edge_classifier
 import flake_identifier
-import flake_identifier_yolo
-import vignetting_corrector
 
 DLL_PATH = os.getcwd() + r"\APIs\PriorSDK1.9.2\x64\PriorScientificSDK.dll"
 PRIOR_COM_PORT = sys.argv[1]
 TURRET_COM_PORT = sys.argv[2]
-DEFAULT_EXPOSURE = 60
-
-CENTER_CROP_WIDTH_RATIO_2X = 0.7
-CENTER_CROP_HEIGHT_RATIO_2X = 0.7
-
-CENTER_CROP_WIDTH_RATIO_10X = 0.9
-CENTER_CROP_HEIGHT_RATIO_10X = 0.9
-
-CENTER_CROP_WIDTH_RATIO_20X = 1
-CENTER_CROP_HEIGHT_RATIO_20X = 1
-
-CENTER_CROP_WIDTH_RATIO_100X = 1
-CENTER_CROP_HEIGHT_RATIO_100X = 1
-
-RELATIVE_2X_Z = 0
-RELATIVE_10X_Z = 1250
-RELATIVE_20X_Z = 4300
-RELATIVE_100X_Z = 4300
-
-X_SIZE_2 = 10642
-Y_SIZE_2 = 7027
-
-X_SIZE_10 = 2142 
-Y_SIZE_10 = 1359
-
-MAGNIFICATION = 2
-
-IMAGE_UM_PER_PIXEL_2X_MED = 3.8569 # um
-IMAGE_UM_PER_PIXEL_10X_MED = 0.76609 # um
-
-FLATFIELD_IMG = cv2.imread(str(home_dir / "Flatfields" / "flatfield_2x_med_smoothed.png"))
 
 try:
     fi = flake_identifier.Flake_Identifier()
@@ -104,8 +72,6 @@ class App:
         self.view_mode = None
         self.set_view("Camera View", False)
 
-        self.scan_running = False
-
         self.hcam = None
         self.width = 0
         self.height = 0
@@ -121,45 +87,64 @@ class App:
         self.panels = []
 
         self.scan_info_panel = ScanInfoPanel(parent=self.main_frame)
-        
+
         self.panels.append({
             "name": "Info Panel",
             "frame": self.scan_info_panel.frame,
             "var": BooleanVar(value=False)
         })
 
-        self.stage = StageController(PRIOR_COM_PORT, DLL_PATH)
-        self.turret = TurretController(TURRET_COM_PORT)
+        self.stage_controller = StageController(PRIOR_COM_PORT, DLL_PATH)
+        self.turret = turret(TURRET_COM_PORT)
+
         self.frame_processor = FrameProcessor(
             root=self.root,
-            stage=self.stage,
+            stage=self.stage_controller,
             home_dir=home_dir,
-
             get_view_mode=lambda: self.view_mode,
             get_filter_status=lambda: self.filter_var.get(),
             get_magnification=lambda: self.magnification,
             #get_live_mapping_status=lambda: self.live_mapping_var.get(),
-
             display_image=self.display_image,
             display_map=self.display_map,
             #place_live_frame_on_map=self.place_live_frame_on_map,
-
             disable_buttons=self.disable_buttons,
             enable_buttons=self.enable_buttons,
         )
         self.frame_processor.run_camera()
 
+        self.scan_manager = ScanManager(
+            root=self.root,
+            home_dir=home_dir,
+            stage=self.stage_controller,
+            turret=self.turret,
+            camera=self.frame_processor.get_camera,
+            frame_processor=self.frame_processor,
+            get_view_mode=lambda: self.view_mode,
+            get_filter_status=self.filter_var.get,
+            set_filter_status=self.filter_var.set,
+            set_view=self.set_view,
+            display_image=self.display_image,
+            display_map=self.display_map,
+            update_scan_status=self.scan_info_panel.update_status,
+            open_panel=self.open_panel,
+            get_true_map=self.get_true_map,
+            set_true_map=self.set_true_map,
+            get_filter_map=self.get_filter_map,
+            set_filter_map=self.set_filter_map,
+        )
+
         self.focus_controller = FocusController(
-            stage=self.stage,
+            stage=self.stage_controller,
             frame_processor=self.frame_processor,
             disable_buttons=self.disable_buttons,
             enable_buttons=self.enable_buttons,
         )
 
-        self.stage_control_panel = StageControlPanel(
+        self.stage_controller_control_panel = StageControlPanel(
             parent=self.main_frame,
             root=self.root,
-            stage=self.stage,
+            stage=self.stage_controller,
             disable_buttons=self.disable_buttons,
             enable_buttons=self.enable_buttons,
             register_button=self.buttons.append
@@ -167,7 +152,7 @@ class App:
 
         self.panels.append({
             "name": "Stage Control Panel",
-            "frame": self.stage_control_panel.frame,
+            "frame": self.stage_controller_control_panel.frame,
             "var": BooleanVar(value=False)
         })
 
@@ -185,14 +170,11 @@ class App:
 
         self.objective_control_panel = ObjectiveControlPanel(
             parent=self.main_frame,
-            stage=self.stage,
+            stage=self.stage_controller,
             turret=self.turret,
             get_magnification=lambda: self.magnification,
             set_magnification=self.set_magnification,
             auto_focus=self.focus_controller.auto_focus,
-            disable_buttons=self.disable_buttons,
-            enable_buttons=self.enable_buttons,
-            register_button=self.buttons.append,
         )
 
         self.panels.append({
@@ -261,10 +243,10 @@ class App:
         menu_bar.add_cascade(label="Panels", menu=panel_menu)
 
         scan_menu = Menu(menu_bar, tearoff=0)
-        scan_menu.add_command(label="Run Complete Scan (1 Chip)", command=self.run_complete_scan)
-        scan_menu.add_command(label="Run Complete Scan", command=lambda: self.run_complete_scan(window=(11, 3)))
-        scan_menu.add_command(label="Run 2x Scan", command=lambda: self.run_2x_scan(full_zoom=True))
-        scan_menu.add_command(label="Run 10x Scan", command=self.run_10x_scan)
+        scan_menu.add_command(label="Run Complete Scan (1 Chip)", command=self.scan_manager.run_complete_scan)
+        scan_menu.add_command(label="Run Complete Scan", command=lambda: self.scan_manager.run_complete_scan(window=(11, 3)))
+        scan_menu.add_command(label="Run 2x Scan", command=lambda: self.scan_manager.run_2x_scan(full_zoom=True))
+        scan_menu.add_command(label="Run 10x Scan", command=self.scan_manager.run_10x_scan)
         menu_bar.add_cascade(label="Scan", menu=scan_menu)
 
         self.results_menu = Menu(menu_bar, tearoff=0)
@@ -365,7 +347,7 @@ class App:
         style = ttk.Style()
         style.configure("Custom.Horizontal.TScale", background="white")
 
-        self.exposure_var = DoubleVar(value=DEFAULT_EXPOSURE)
+        self.exposure_var = DoubleVar(value=config.DEFAULT_EXPOSURE)
         self.adjust_exposure_slider = ttk.Scale(
             self.adjust_exposure_background,
             from_=30,
@@ -379,7 +361,7 @@ class App:
 
         self.exposure_value_label = Label(
             self.adjust_exposure_background,
-            text=f"Exposure: {DEFAULT_EXPOSURE}",
+            text=f"Exposure: {config.DEFAULT_EXPOSURE}",
             bg="white",
             fg="black",
             font=("TkDefaultFont", 8)
@@ -497,390 +479,6 @@ class App:
 
     def set_magnification(self, magnification):
         self.magnification = magnification
-
-    # ------------- Scanning Functions -------------
-
-    def run_complete_scan(self, window=(3, 3)):
-
-        self.open_panel("Info Panel")
-
-        start_time = time.time()
-
-        scan_path = home_dir / "Scans" / datetime.now().strftime("Full Scan (%Y-%m-%d) (%H-%M-%S)")
-
-        self.update_scan_status(scan_type="Full Scan")
-
-        center_x, center_y, scale_2x = self.run_2x_scan(scan_path=scan_path, full_scan=True, full_scan_start_time=start_time, window=window, full_zoom=True)
-        chips = self.find_chips(self.filter_map)
-        scan_coordinates = self.generate_10x_scan_coordinates(chips, center_x, center_y, scale_2x)
-
-        image_queue = Queue(maxsize=200)
-
-        flake_detection_thread = threading.Thread(
-            target=self.run_10x_flake_detection,
-            kwargs={"image_queue": image_queue},
-            daemon=True
-        )
-
-        flake_detection_thread.start()
-
-        self.run_10x_scan(scan_coordinates, scan_path=scan_path, full_scan=True, full_scan_start_time=start_time, image_queue=image_queue)
-        image_queue.put(None)
-
-        flake_detection_thread.join()
-
-        print("Full scan finished!")
-        print(f"Time taken: {time.time() - start_time:.2f}s")
-
-        self.go_to_position(x = 0,  y = 0)
-        self.turret_controller.change_objective(1)
-
-    def run_2x_scan(self, window=(3, 3), scan_path=None, zoom=6, full_scan=False, full_scan_start_time = None, full_zoom=False):
-
-        self.open_panel("Info Panel")
-
-        print("2x scan running...")
-
-        self.turret_controller.change_objective(1)
-
-        self.set_view("Map", True)
-
-        start_time = time.time()
-        if scan_path is None:
-            path = home_dir / "Scans" / datetime.now().strftime("2x (%Y-%m-%d) (%H-%M-%S)")
-        else:
-            path = scan_path / "All Images" / "2x"
-
-        self.true_map = np.zeros((3000, 3000, 3), dtype=np.uint8)
-        self.filter_map = np.zeros((3000, 3000), dtype=np.uint8)
-        self.scan_running = True
-
-        global x_pos, y_pos
-
-        center_x = x_pos
-        center_y = y_pos
-
-        #coords, total_frames = self.generate_spiral_coords(max(num_steps_x, num_steps_y))
-        coords, total_frames = self.generate_rect_coords(window[1], window[0])
-
-        zoom = max(zoom, int(self.hcam.get_Size()[1] / (self.true_map.shape[0] / window[1])), int(self.hcam.get_Size()[0] / (self.true_map.shape[1] / window[0])))
-        
-        if full_zoom:
-            zoom = max(int(self.hcam.get_Size()[1] / (self.true_map.shape[0] / window[1])), int(self.hcam.get_Size()[0] / (self.true_map.shape[1] / window[0])))
-
-        if full_scan:
-            self.update_scan_status(stage="2x Scan", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
-        else:
-            self.update_scan_status(scan_type="2x Scan", stage="2x Scan", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
-
-        i = 1
-        for offset_x, offset_y in coords:
-
-            '''
-            target_x = center_x + offset_x * self.hcam.get_Size()[0] * IMAGE_UM_PER_PIXEL_2X_MED * CENTER_CROP_WIDTH_RATIO_2X
-            target_y = center_y - offset_y * self.hcam.get_Size()[1] * IMAGE_UM_PER_PIXEL_2X_MED * CENTER_CROP_HEIGHT_RATIO_2X
-            '''
-            
-            target_x = center_x + offset_x * X_SIZE_2 * CENTER_CROP_WIDTH_RATIO_2X
-            target_y = center_y - offset_y * Y_SIZE_2 * CENTER_CROP_HEIGHT_RATIO_2X
-
-            self.stage.go_to_pos(target_x, target_y)
-            x_pos, y_pos = target_x, target_y
-
-            self.stage.wait_until_not_busy()
-
-            img = self.frame_processor.capture_frame()
-            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-            image_path = path / "Raw" / f"img_2x_{i}.png"
-            image_path.parent.mkdir(parents=True, exist_ok=True)
-            self.frame_processor.save_image(image=img, filename=image_path)
-
-            binary = chip_edge_classifier.chip_filter(img, display=False)
-            img_binary_rgb = cv2.cvtColor(binary, cv2.COLOR_GRAY2RGB)
-
-            if self.view_mode == "Camera View":
-                if self.filter_var.get():
-                    self.display_image(cv2.cvtColor(chip_edge_classifier.chip_filter(img), cv2.COLOR_GRAY2RGB))
-                else:
-                    self.display_image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-
-            map_x = int(self.filter_map.shape[1] / 2 - (offset_x + 0.5) * img_binary_rgb.shape[1] / zoom)
-            map_y = int(self.filter_map.shape[0] / 2 + (offset_y - 0.5) * img_binary_rgb.shape[0] / zoom)
-
-            h, w = img_binary_rgb.shape[:2]
-            img_small = img_rgb[::zoom, ::zoom]
-            img_binary_small = img_binary_rgb[::zoom, ::zoom, 0]
-
-            x_start = max(0, map_x)
-            y_start = max(0, map_y)
-            x_end = min(self.filter_map.shape[1], x_start + img_binary_small.shape[1])
-            y_end = min(self.filter_map.shape[0], y_start + img_binary_small.shape[0])
-
-            self.true_map[y_start:y_end, x_start:x_end] = img_small[:y_end - y_start, :x_end - x_start]
-            self.filter_map[y_start:y_end, x_start:x_end] = img_binary_small[:y_end - y_start, :x_end - x_start]
-
-            stage_elapsed = time.time() - start_time
-            if full_scan_start_time is not None:
-                total_elapsed = time.time() - full_scan_start_time
-                total_elapsed_str = time.strftime("%H:%M:%S", time.gmtime(total_elapsed))
-            stage_elapsed_str = time.strftime("%H:%M:%S", time.gmtime(stage_elapsed))
-            progress_percent = f"{(i)}/{total_frames} ({(i)*100//total_frames}%)"
-            i = i + 1
-    
-            if full_scan:
-                self.update_scan_status(progress=progress_percent, stage_elapsed_time=stage_elapsed_str, total_elapsed_time=total_elapsed_str)
-            else:
-                self.update_scan_status(progress=progress_percent, stage_elapsed_time=stage_elapsed_str, total_elapsed_time=stage_elapsed_str)
-
-        self.scan_running = False
-        self.stage.go_to_pos(center_x, center_y)
-        print("2x scan imaging finished!")
-        print("Time taken: {:.2f}s".format(time.time() - start_time))
-
-        return center_x, center_y, zoom
-
-    def run_10x_scan(self, scan_coordinates_10x=None, scan_path=None, image_queue=None, zoom=4, full_scan=False, full_scan_start_time=None):
-
-        self.open_panel("Info Panel")
-
-        start_time = time.time()
-
-        self.set_view("Map", False)
-
-        self.turret_controller.change_objective(2)
-
-        input("Press Enter to start 10x scan...")
-
-        if scan_path is None:
-            path = home_dir / "Scans" / datetime.now().strftime("10x (%Y-%m-%d) (%H-%M-%S)")
-        else:
-            path = scan_path / "All Images" / "10x"
-
-        if scan_coordinates_10x is None:
-            x, y, _ = self.stage.get_position()
-            scan_coordinates_10x = [[x, y, 10, 10]]
-
-        cropped_flatfield = self.frame_processor.crop_frame(FLATFIELD_IMG)
-
-        i = 0
-        for coordinates in scan_coordinates_10x:
-
-            chip_time = time.time()
-
-            i += 1
-            self.true_map = np.zeros((3000, 3000, 3), dtype=np.uint8)
-            self.scan_running = True
-
-            if full_scan:
-                self.update_scan_status(stage=f"10x Scan - Chip {i} / {len(scan_coordinates_10x)}", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
-            else:
-                self.update_scan_status(scan_type="10x Scan", stage="10x Scan", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
-
-            global x_pos, y_pos
-
-            center_x = coordinates[0]
-            center_y = coordinates[1]
-
-            coords, total_frames = self.generate_rect_coords(coordinates[2], coordinates[3])
-
-            self.stage.move_to_pos(center_x, center_y)
-
-            max_zoom = max(zoom, int(self.hcam.get_Size()[1] / (self.true_map.shape[0] / coordinates[2])), int(self.hcam.get_Size()[0] / (self.true_map.shape[1] / coordinates[3])))
-
-            j = 0
-            for offset_x, offset_y in coords:
-                '''
-                target_x = center_x + offset_x * self.hcam.get_Size()[0] * IMAGE_UM_PER_PIXEL_10X_MED * CENTER_CROP_WIDTH_RATIO_10X
-                target_y = center_y - offset_y * self.hcam.get_Size()[1] * IMAGE_UM_PER_PIXEL_10X_MED * CENTER_CROP_HEIGHT_RATIO_10X
-                '''
-                
-                target_x = center_x + offset_x * X_SIZE_10 * CENTER_CROP_WIDTH_RATIO_10X
-                target_y = center_y - offset_y * Y_SIZE_10 * CENTER_CROP_HEIGHT_RATIO_10X
-
-                self.stage.go_to_pos(target_x, target_y)
-                x_pos, y_pos = target_x, target_y
-
-                self.stage.wait_until_not_busy()
-
-                img = self.frame_processor.capture_frame()
-                img = vignetting_corrector.vignetting_correction_direct_single_channel(img, cropped_flatfield, reference_point=(img.shape[1]//2, img.shape[0]//2))
-                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-                image_path = path / f"Chip {i} ({center_x}, {center_y})" / "Raw" / f"img_10x_{j}.png"
-                image_path.parent.mkdir(parents=True, exist_ok=True)
-                self.frame_processor.save_image(image=img, filename=image_path)
-
-                if image_queue is not None:
-                    image_queue.put(image_path)
-
-                if self.view_mode == "Camera View":
-                    if self.filter_var.get():
-                        self.filter_var.set(False)
-                    self.root.after(0, lambda img=img: self.display_image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)))
-
-                map_x = int(self.filter_map.shape[1] / 2 - (offset_x + 0.5) * img_rgb.shape[1] / max_zoom)
-                map_y = int(self.filter_map.shape[0] / 2 + (offset_y - 0.5) * img_rgb.shape[0] / max_zoom)
-
-                h, w = img_rgb.shape[:2]
-                img_small = img_rgb[::max_zoom, ::max_zoom]
-
-                x_start = max(0, map_x)
-                y_start = max(0, map_y)
-                x_end = min(self.filter_map.shape[1], x_start + img_small.shape[1])
-                y_end = min(self.filter_map.shape[0], y_start + img_small.shape[0])
-
-                j += 1
-
-                self.true_map[y_start:y_end, x_start:x_end] = img_small[:y_end - y_start, :x_end - x_start]
-
-                self.display_map()
-
-                stage_elapsed = time.time() - chip_time
-                if full_scan_start_time is not None:
-                    total_elapsed = time.time() - full_scan_start_time
-                    total_elapsed_str = time.strftime("%H:%M:%S", time.gmtime(total_elapsed))
-                stage_elapsed_str = time.strftime("%H:%M:%S", time.gmtime(stage_elapsed))
-                progress_percent = f"{(j)}/{total_frames} ({(j)*100//total_frames}%)"
-    
-                if full_scan:
-                    self.update_scan_status(progress=progress_percent, stage_elapsed_time=stage_elapsed_str, total_elapsed_time=total_elapsed_str)
-                else:
-                    self.update_scan_status(progress=progress_percent, stage_elapsed_time=stage_elapsed_str, total_elapsed_time=stage_elapsed_str)
-
-            print("Chip {} imaging finished!".format(i))
-            print("Time taken: {:.2f}s".format(time.time() - chip_time))
-
-        if image_queue is not None:
-            image_queue.put(None)
-        self.scan_running = False
-
-        print("10x scan imaging finished!")
-        print("Time taken: {:.2f}s".format(time.time() - start_time))
-
-    def find_chips(self, binary_map):
-        binary_map = (self.filter_map > 0).astype("uint8") * 255
-        contours, _ = cv2.findContours(binary_map, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        filtered_contours = [c for c in contours if cv2.contourArea(c) >= 1000]
-
-        chips = []
-
-        for i, contour in enumerate(filtered_contours):
-            x, y, w, h = cv2.boundingRect(contour)
-            chips.append((x,y,w,h))
-            cv2.rectangle(self.true_map, (x, y), (x+w, y+h), (255,255,0), 5)
-
-        return chips
-    
-    def generate_10x_scan_coordinates(self, chips, scan_center_x, scan_center_y, scale):
-
-        window_w = int(self.hcam.get_Size()[0] * CENTER_CROP_WIDTH_RATIO_2X / scale / (IMAGE_UM_PER_PIXEL_2X_MED / IMAGE_UM_PER_PIXEL_10X_MED) / CENTER_CROP_WIDTH_RATIO_10X)
-        window_h = int(self.hcam.get_Size()[1] * CENTER_CROP_HEIGHT_RATIO_2X / scale / (IMAGE_UM_PER_PIXEL_2X_MED / IMAGE_UM_PER_PIXEL_10X_MED) / CENTER_CROP_HEIGHT_RATIO_10X)
-        
-        #window_w = int(self.hcam.get_Size()[0] / scale / (IMAGE_UM_PER_PIXEL_2X_MED / IMAGE_UM_PER_PIXEL_10X_MED))
-        #window_h = int(self.hcam.get_Size()[1] / scale / (IMAGE_UM_PER_PIXEL_2X_MED / IMAGE_UM_PER_PIXEL_10X_MED))
-
-        scan_coordinates_10x = []
-
-        for chip in chips:
-            x, y, w, h = chip
-
-            num_windows_x = math.ceil(w / window_w)
-            num_windows_y = math.ceil(h / window_h)
-
-            grid_w = num_windows_x * window_w
-            grid_h = num_windows_y * window_h
-
-            chip_center_x = x + w // 2
-            chip_center_y = y + h // 2
-
-            start_x = max(0, chip_center_x - grid_w // 2)
-            start_y = max(0, chip_center_y - grid_h // 2)
-
-            start_pos_x = - (chip_center_x - self.true_map.shape[1] / 2) * (X_SIZE_2 * CENTER_CROP_WIDTH_RATIO_2X) / (self.hcam.get_Size()[0] / scale * CENTER_CROP_WIDTH_RATIO_2X) + scan_center_x
-            start_pos_y = - (chip_center_y - self.true_map.shape[0] / 2) * (Y_SIZE_2 * CENTER_CROP_WIDTH_RATIO_2X) / (self.hcam.get_Size()[1] / scale * CENTER_CROP_WIDTH_RATIO_2X) + scan_center_y
-            scan_coordinates_10x.append([round(start_pos_x), round(start_pos_y), num_windows_x, num_windows_y])
-
-            for i in range(num_windows_x):
-                for j in range(num_windows_y):
-                    wx = start_x + i * window_w
-                    wy = start_y + j * window_h
-
-                    cv2.rectangle(self.true_map, (wx, wy), (wx + window_w, wy + window_h), (0, 255, 0), 5, cv2.LINE_AA)
-
-            cv2.circle(self.true_map, (chip_center_x, chip_center_y), 8, (0, 0, 255), -1, cv2.LINE_AA)
-
-        cv2.circle(self.true_map, (int(self.true_map.shape[1] / 2), int(self.true_map.shape[0] / 2)), 8, (255, 0, 0), -1, cv2.LINE_AA)
-
-        self.root.after(0, self.display_map)
-
-        return scan_coordinates_10x
-
-    def generate_rect_coords(self, x, y):
-
-        rect_coords = []
-        total_frames = x * y
-
-        for i in range(x):
-
-            if i % 2 == 0:
-                y_range = range(y)
-            else:
-                y_range = range(y - 1, -1, -1)
-
-            for j in y_range:
-                rect_coords.append((i - x // 2, j - y // 2))
-
-        return rect_coords, total_frames
-
-    def generate_spiral_coords(self, length):
-
-        spiral_coords = []
-        total_frames = length ** 2
-
-        dx, dy = 0, 0
-        step = 1
-        direction = 0
-
-        while len(spiral_coords) < total_frames:
-            for _ in range(2):
-                for _ in range(step):
-                    if len(spiral_coords) >= total_frames:
-                        break
-                    spiral_coords.append((dx, dy))
-                    if direction == 0:
-                        dx += 1
-                    elif direction == 1:
-                        dy += 1
-                    elif direction == 2:
-                        dx -= 1
-                    else:
-                        dy -= 1
-                direction = (direction + 1) % 4
-            step += 1
-
-        return spiral_coords, total_frames
-
-    # ------------- Flake Detection -------------
-
-    def run_10x_flake_detection(self, image_queue=None):
-        while True:
-            img_path = image_queue.get()
-            if img_path is None:
-                break
-            img = cv2.imread(str(img_path))
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            scanned_img, _, save = fi.identify_flakes_flake_model(img)
-            out_path = img_path.parent.parent / "Processed" / img_path.name
-            self.frame_processor.save_image(cv2.cvtColor(scanned_img, cv2.COLOR_RGB2BGR), save_dir=out_path.parent, filename=out_path.name)
-            if save:
-                chip_folder = img_path.parent.parent
-                scan_root = chip_folder.parent.parent.parent        
-                flakes_dir = scan_root / "Flakes Found" / chip_folder.name
-                flakes_dir.mkdir(parents=True, exist_ok=True)       
-                self.frame_processor.save_image(cv2.cvtColor(scanned_img, cv2.COLOR_RGB2BGR), save_dir=flakes_dir, filename=img_path.name)
-            image_queue.task_done()
 
     # ------------- View Scan Functions -------------
 
@@ -1014,17 +612,17 @@ class App:
 
         if self.view_mode == "Camera View":
             if self.magnification == "2x":
-                crop_w = int(w * CENTER_CROP_WIDTH_RATIO_2X)
-                crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_2X)
+                crop_w = int(w * config.CENTER_CROP_WIDTH_RATIO_2X)
+                crop_h = int(h * config.CENTER_CROP_HEIGHT_RATIO_2X)
             elif self.magnification == "10x":
-                crop_w = int(w * CENTER_CROP_WIDTH_RATIO_10X)
-                crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_10X)
+                crop_w = int(w * config.CENTER_CROP_WIDTH_RATIO_10X)
+                crop_h = int(h * config.CENTER_CROP_HEIGHT_RATIO_10X)
             elif self.magnification == "20x":
-                crop_w = int(w * CENTER_CROP_WIDTH_RATIO_20X)
-                crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_20X)
+                crop_w = int(w * config.CENTER_CROP_WIDTH_RATIO_20X)
+                crop_h = int(h * config.CENTER_CROP_HEIGHT_RATIO_20X)
             elif self.magnification == "100x":
-                crop_w = int(w * CENTER_CROP_WIDTH_RATIO_100X)
-                crop_h = int(h * CENTER_CROP_HEIGHT_RATIO_100X)
+                crop_w = int(w * config.CENTER_CROP_WIDTH_RATIO_100X)
+                crop_h = int(h * config.CENTER_CROP_HEIGHT_RATIO_100X)
             else:
                 crop_w = w
                 crop_h = h
@@ -1056,8 +654,6 @@ class App:
         img_tk = ImageTk.PhotoImage(display_img)
         self.img_label.configure(image=img_tk)
         self.img_label.image = img_tk
-
-    # ------------- Setting and Saving Functions -------------
 
     def adjust_exposure(self, exposure):
         self.hcam.put_AutoExpoTarget(int(float(exposure)))
@@ -1209,8 +805,20 @@ class App:
 
     def on_close(self):
         self.frame_processor.close()
-        self.stage.disconnect()
+        self.stage_controller.disconnect()
         self.root.destroy()
+
+    def get_true_map(self):
+        return self.true_map
+    
+    def set_true_map(self, map):
+        self.true_map = map
+
+    def get_filter_map(self):
+        return self.filter_map
+    
+    def set_filter_map(self, filter_map):
+        self.filter_map = filter_map
 
 if __name__ == "__main__":
     root = Tk()

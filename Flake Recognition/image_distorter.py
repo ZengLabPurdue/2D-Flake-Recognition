@@ -1,9 +1,8 @@
+import cv2
 import os
 import sys
 from collections import Counter
 from tkinter import filedialog, messagebox
-
-import cv2  # <-- added
 
 folder_path = filedialog.askdirectory()
 

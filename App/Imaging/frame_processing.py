@@ -70,16 +70,9 @@ class FrameProcessor:
 
             row_bytes = ((self.width * 24 + 31) // 32 * 4)
 
-            img = np.frombuffer(self.buf, dtype=np.uint8).reshape(
-                self.height,
-                row_bytes
-            )
+            img = np.frombuffer(self.buf, dtype=np.uint8).reshape(self.height, row_bytes)
 
-            img = img[:, :self.width * 3].reshape(
-                self.height,
-                self.width,
-                3
-            )
+            img = img[:, :self.width * 3].reshape(self.height, self.width, 3)
 
             img = cv2.flip(img, -1)
 
@@ -143,10 +136,7 @@ class FrameProcessor:
 
             if view_mode == "Camera View":
                 if self.get_filter_status():
-                    display = cv2.cvtColor(
-                        chip_edge_classifier.chip_filter(img),
-                        cv2.COLOR_GRAY2RGB
-                    )
+                    display = cv2.cvtColor(chip_edge_classifier.chip_filter(img), cv2.COLOR_GRAY2RGB)
                 else:
                     display = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
@@ -421,6 +411,9 @@ class FrameProcessor:
             print(f"Image saved to {filepath}")
 
         return filepath
+
+    def get_camera(self):
+        return self.hcam
 
     def close(self):
         try:
