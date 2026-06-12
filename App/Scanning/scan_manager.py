@@ -19,7 +19,7 @@ class ScanManager:
         root,
         home_dir,
         stage,
-        turret,
+        turret_controller,
         camera,
         frame_processor,
         get_view_mode,
@@ -38,7 +38,7 @@ class ScanManager:
         self.root = root
         self.home_dir = home_dir
         self.stage = stage
-        self.turret = turret
+        self.turret_controller = turret_controller
         self.camera = camera
         self.frame_processor = frame_processor
         self.get_view_mode = get_view_mode
@@ -64,19 +64,29 @@ class ScanManager:
         self.update_scan_status(scan_type="Full Scan")
 
         center_x, center_y, scale_2x = self.run_2x_scan(scan_path=scan_path, full_scan=True, full_scan_start_time=start_time, window=window, full_zoom=True)
-        wafers = wafer_detection.find_wafers(self.get_filter_map(), draw_image=self.get_true_map())
-        scan_coordinates = coordinate_generator.generate_10x_scan_coordinates(wafers, center_x, center_y, scale_2x)
+        wafers, true_map = wafer_detection.find_wafers(self.get_filter_map(), self.get_true_map())
+        print("Wafers found")
+        self.set_true_map(true_map)
+        print("True map set")
+        scan_coordinates = coordinate_generator.generate_10x_scan_coordinates(wafers, center_x, center_y, scale_2x, self.get_true_map(), self.camera.get_Size())
+        print("Scan coordinates created")
 
         image_queue = Queue(maxsize=200)
+        print("Queue made")
 
         flake_detection_thread = threading.Thread(
             target=flake_detection.flake_detection_10x,
-            kwargs={"image_queue": image_queue},
+            kwargs={
+                "image_queue": image_queue,
+                "frame_processor" : self.frame_processor
+            },
             daemon=True,
         )
 
         flake_detection_thread.start()
+        print("Started flake detection thread")
 
+        print("Running 10x")
         self.run_10x_scan(scan_coordinates, scan_path=scan_path, full_scan=True, full_scan_start_time=start_time, image_queue=image_queue)
 
         image_queue.put(None)
@@ -86,7 +96,7 @@ class ScanManager:
         print(f"Time taken: {time.time() - start_time:.2f}s")
 
         self.stage.move_to_xy(0, 0)
-        self.turret.change_objective(1)
+        self.turret_controller.change_objective(1)
 
     def run_2x_scan(
         self,
@@ -101,7 +111,7 @@ class ScanManager:
 
         print("2x scan running...")
 
-        self.turret.change_objective(1)
+        self.turret_controller.change_objective(1)
         self.set_view("Map", True)
 
         start_time = time.time()
@@ -113,9 +123,10 @@ class ScanManager:
 
         self.set_true_map(np.zeros((3000, 3000, 3), dtype=np.uint8))
         self.set_filter_map(np.zeros((3000, 3000), dtype=np.uint8))
-        self.set_scan_running(True)
 
-        center_x, center_y, _ = self.stage.get_position()
+        pos = self.stage.get_position()
+        center_x = pos.x
+        center_y = pos.y
 
         coords, total_frames = coordinate_generator.generate_rect_coords(window[1], window[0])
 
@@ -189,7 +200,6 @@ class ScanManager:
             else:
                 self.update_scan_status(progress=progress_percent, stage_elapsed_time=stage_elapsed_str, total_elapsed_time=stage_elapsed_str)
 
-        self.set_scan_running(False)
         self.stage.move_to_xy(center_x, center_y)
 
         print("2x scan imaging finished!")
@@ -211,7 +221,7 @@ class ScanManager:
         start_time = time.time()
 
         self.set_view("Map", False)
-        self.turret.change_objective(2)
+        self.turret_controller.change_objective(2)
 
         input("Press Enter to start 10x scan...")
 
@@ -230,7 +240,6 @@ class ScanManager:
             wafer_time = time.time()
 
             self.set_true_map(np.zeros((3000, 3000, 3), dtype=np.uint8))
-            self.set_scan_running(True)
 
             if full_scan:
                 self.update_scan_status(stage=f"10x Scan - wafer {i} / {len(scan_coordinates_10x)}", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
@@ -258,7 +267,7 @@ class ScanManager:
 
                 img = self.frame_processor.capture_frame()
 
-                img = vignetting_corrector.vignetting_correction_direct_single_channel(
+                img = vignetting_corrector.correct_vignetting_effect(
                     img,
                     cropped_flatfield,
                     reference_point=(img.shape[1] // 2, img.shape[0] // 2),
@@ -319,8 +328,6 @@ class ScanManager:
 
         if image_queue is not None:
             image_queue.put(None)
-
-        self.set_scan_running(False)
 
         print("10x scan imaging finished!")
         print(f"Time taken: {time.time() - start_time:.2f}s")

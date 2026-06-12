@@ -30,8 +30,8 @@ flake_model_path = Path(home_dir) / "flake_classifier_tf.keras"
 sys.path.insert(0, str(flake_reg_path))
 
 #import single_frame_pipeline
-import contour_finder
-import flake_classifier
+from Scanning import contour_finder
+from Scanning import flake_classifier
 
 class Flake_Identifier():
     def __init__(self):

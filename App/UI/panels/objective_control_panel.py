@@ -8,26 +8,22 @@ class ObjectiveControlPanel:
         self,
         parent,
         stage_controller,
-        turret,
         turret_controller,
-        get_magnification,
         set_magnification,
-        auto_focus,
+        register_button
     ):
         self.parent = parent
         self.stage = stage_controller
-        self.turret = turret
         self.turret_controller = turret_controller
-        self.get_magnification = get_magnification
         self.set_magnification = set_magnification
-        self.auto_focus = auto_focus
+        self.register_button = register_button
 
         self.objective_var = tk.StringVar(value="Objective: Unknown")
 
         self.frame = self._build_panel()
 
         # Initialize turret position display.
-        self.turret.turn_to_position(1)
+        self.turret_controller.turn_to_position(1)
         self.objective_var.set("Objective: 1")
         self.set_magnification("2x")
 
@@ -115,10 +111,14 @@ class ObjectiveControlPanel:
         self.btn4.grid(row=1, column=1, sticky="nsew", padx=2, pady=2)
         self.btn5.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=2, pady=2)
 
-        self.btn1.bind("<ButtonPress-1>", lambda e: self.turret_controller.change_objective(1))
-        self.btn2.bind("<ButtonPress-1>", lambda e: self.turret_controller.change_objective(2))
-        self.btn3.bind("<ButtonPress-1>", lambda e: self.turret_controller.change_objective(3))
-        self.btn4.bind("<ButtonPress-1>", lambda e: self.turret_controller.change_objective(4))
-        self.btn5.bind("<ButtonPress-1>", lambda e: self.turret_controller.change_objective(5))
+        self.btn1.bind("<ButtonPress-1>", lambda: self.change_objective(1))
+        self.btn2.bind("<ButtonPress-1>", lambda: self.change_objective(2))
+        self.btn3.bind("<ButtonPress-1>", lambda: self.change_objective(3))
+        self.btn4.bind("<ButtonPress-1>", lambda: self.change_objective(4))
+        self.btn5.bind("<ButtonPress-1>", lambda: self.change_objective(5))
 
         return panel
+    
+    def change_objective(self, position):
+        self.turret_controller.change_objective(position)
+        self.objective_var.set(f"Objective: {position}")

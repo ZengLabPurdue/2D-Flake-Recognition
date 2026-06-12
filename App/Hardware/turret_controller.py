@@ -1,22 +1,29 @@
 import config
-from turret_api import turret
+from Hardware.turret_api import turret
 
 class TurretController:
 
     def __init__(
         self, 
-        app,
         stage,
+        turret,
         auto_focus,
-        objective_panel,
+        enable_buttons,
+        disable_buttons,
+        set_magnification
     ):
-        self.app = app
         self.stage = stage
+        self.turret = turret
         self.auto_focus = auto_focus
-        self.objective_panel = objective_panel
+        self.enable_buttons = enable_buttons
+        self.disable_buttons = disable_buttons
+        self.set_magnification = set_magnification
 
     def get_position(self):
-        return turret.check_position()
+        return self.turret.check_position()
+    
+    def turn_to_position(self, position):
+        self.turret.turn_to_position(position)
 
     def change_objective(self, position):
         objective_map = {
@@ -27,10 +34,10 @@ class TurretController:
             5: ("100x", config.RELATIVE_100X_Z),
         }
 
-        self.app.disable_buttons()
+        self.disable_buttons()
 
         try:
-            current_position = turret.check_position()
+            current_position = self.get_position()
 
             if position == current_position:
                 return
@@ -43,7 +50,7 @@ class TurretController:
             change_z = target_rel_z - current_rel_z
 
             self.stage.move_to_z(current_z + change_z)
-            turret.turn_to_position(position)
+            self.turn_to_position(position)
 
             if position == 1:
                 self.auto_focus()
@@ -60,7 +67,6 @@ class TurretController:
                 pass
 
             self.set_magnification(magnification)
-            self.objective_panel.objective_var.set(f"Objective: {position}")
 
         finally:
-            self.app.enable_buttons()
+            self.enable_buttons()

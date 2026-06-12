@@ -1,5 +1,6 @@
 import math
 import cv2
+import config
 
 def generate_rect_coords(x, y):
     rect_coords = []
@@ -54,20 +55,11 @@ def generate_10x_scan_coordinates(
     scale,
     true_map,
     camera_size,
-    center_crop_width_ratio_2x,
-    center_crop_height_ratio_2x,
-    center_crop_width_ratio_10x,
-    center_crop_height_ratio_10x,
-    image_um_per_pixel_2x,
-    image_um_per_pixel_10x,
-    x_size_2,
-    y_size_2,
 ):
     camera_width, camera_height = camera_size
 
-    window_w = int(camera_width * center_crop_width_ratio_2x / scale / (image_um_per_pixel_2x / image_um_per_pixel_10x) / center_crop_width_ratio_10x)
-
-    window_h = int(camera_height * center_crop_height_ratio_2x / scale / (image_um_per_pixel_2x / image_um_per_pixel_10x) / center_crop_height_ratio_10x)
+    window_w = int(camera_width * config.CENTER_CROP_WIDTH_RATIO_2X / scale / (config.IMAGE_UM_PER_PIXEL_2X_MED / config.IMAGE_UM_PER_PIXEL_10X_MED) / config.CENTER_CROP_WIDTH_RATIO_10X)
+    window_h = int(camera_height * config.CENTER_CROP_HEIGHT_RATIO_2X / scale / (config.IMAGE_UM_PER_PIXEL_2X_MED / config.IMAGE_UM_PER_PIXEL_10X_MED) / config.CENTER_CROP_HEIGHT_RATIO_10X)
 
     scan_coordinates_10x = []
 
@@ -86,8 +78,8 @@ def generate_10x_scan_coordinates(
         start_x = max(0, wafer_center_x - grid_w // 2)
         start_y = max(0, wafer_center_y - grid_h // 2)
 
-        start_pos_x = -(wafer_center_x - true_map.shape[1] / 2) * (x_size_2 * center_crop_width_ratio_2x) / (camera_width / scale * center_crop_width_ratio_2x) + scan_center_x
-        start_pos_y = -(wafer_center_y - true_map.shape[0] / 2) * (y_size_2 * center_crop_width_ratio_2x) / (camera_height / scale * center_crop_width_ratio_2x) + scan_center_y
+        start_pos_x = -(wafer_center_x - true_map.shape[1] / 2) * (config.X_SIZE_2 * config.CENTER_CROP_WIDTH_RATIO_2X) / (camera_width / scale * config.CENTER_CROP_WIDTH_RATIO_2X) + scan_center_x
+        start_pos_y = -(wafer_center_y - true_map.shape[0] / 2) * (config.Y_SIZE_2 * config.CENTER_CROP_HEIGHT_RATIO_2X) / (camera_height / scale * config.CENTER_CROP_HEIGHT_RATIO_2X) + scan_center_y
 
         scan_coordinates_10x.append([round(start_pos_x), round(start_pos_y), num_windows_x, num_windows_y,])
 
@@ -99,7 +91,6 @@ def generate_10x_scan_coordinates(
                 cv2.rectangle(true_map, (wx, wy), (wx + window_w, wy + window_h), (0, 255, 0), 5, cv2.LINE_AA)
 
         cv2.circle(true_map, (wafer_center_x, wafer_center_y), 8, (0, 0, 255), -1, cv2.LINE_AA)
-
         cv2.circle(true_map, (int(true_map.shape[1] / 2), int(true_map.shape[0] / 2)), 8, (255, 0, 0), -1, cv2.LINE_AA)
 
         return scan_coordinates_10x

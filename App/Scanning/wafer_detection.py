@@ -35,7 +35,7 @@ def wafer_filter(image, threshold=None, sample=30, display=False):
 
     return binary
 
-def threshold_after_highest_peak(hist, smoothing=30, min_prominence=0.05, display=False):
+def threshold_after_highest_peak(hist, smoothing=30, min_prominence=0.05, display=True):
 
     if smoothing > 1:
         hist = np.convolve(hist, np.ones(smoothing)/smoothing, mode='same')
@@ -83,7 +83,7 @@ def threshold_after_highest_peak(hist, smoothing=30, min_prominence=0.05, displa
 
     return threshold
 
-def find_wafers(self, filter_map, true_map):
+def find_wafers(filter_map, true_map):
     binary_map = (filter_map > 0).astype("uint8") * 255
     contours, _ = cv2.findContours(binary_map, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     

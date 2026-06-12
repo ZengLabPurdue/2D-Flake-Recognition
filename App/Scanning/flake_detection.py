@@ -1,6 +1,7 @@
 import cv2
+import Scanning.flake_identifier as flake_identifier
 
-def flake_detection_10x(image_queue, flake_identifier, frame_processor):
+def flake_detection_10x(image_queue, frame_processor):
     while True:
         img_path = image_queue.get()
 

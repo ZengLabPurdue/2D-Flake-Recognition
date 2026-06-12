@@ -25,32 +25,24 @@ from pathlib import Path
 import config
 from Scanning.scan_manager import ScanManager
 from Hardware.stage_controller import StageController
+from Hardware.turret_api import turret
+from Hardware.turret_controller import TurretController
 from UI.panels.stage_control_panel import StageControlPanel
-from UI.panels.objective_panel import ObjectiveControlPanel
+from UI.panels.objective_control_panel import ObjectiveControlPanel
 from UI.panels.focus_panel import FocusPanel
 from UI.panels.scan_info_panel import ScanInfoPanel
+from UI.panels.view_scans_panel import ViewScansPanel
+from UI.panels.capture_panel import CapturePanel
+from UI.panels.exposure_panel import ExposurePanel
 from Imaging.frame_processing import FrameProcessor
 from Imaging.focus import FocusController
 
 home_dir = Path(os.path.dirname(os.path.abspath(__file__)))
 parent_dir = home_dir.parent
 
-sys.path.insert(0, str(parent_dir))
-sys.path.insert(0, str(parent_dir / "Flake Recognition"))
-
-from App.Hardware.turret_api import turret
-from App.Hardware.turret_controller import TurretController
-import flake_identifier
-
 DLL_PATH = os.getcwd() + r"\APIs\PriorSDK1.9.2\x64\PriorScientificSDK.dll"
 PRIOR_COM_PORT = sys.argv[1]
 TURRET_COM_PORT = sys.argv[2]
-
-try:
-    fi = flake_identifier.Flake_Identifier()
-except Exception as e:
-    print("Failed to connect to Prior Controller:", e)
-    sys.exit(1)
 
 class App:
     def __init__(self, root):
@@ -78,25 +70,13 @@ class App:
         
         self.magnification = "2x"
 
-        self.view_chip_index = 0
-        self.view_image_index = 0
-        self.view_scan_path = None
-        self.view_folder = None
-
         self.buttons = []
         self.panels = []
 
         self.scan_info_panel = ScanInfoPanel(parent=self.main_frame)
 
-        self.panels.append({
-            "name": "Info Panel",
-            "frame": self.scan_info_panel.frame,
-            "var": BooleanVar(value=False)
-        })
-
         self.stage_controller = StageController(PRIOR_COM_PORT, DLL_PATH)
-        self.turret = turret(TURRET_COM_PORT)
-
+        
         self.frame_processor = FrameProcessor(
             root=self.root,
             stage=self.stage_controller,
@@ -113,12 +93,29 @@ class App:
         )
         self.frame_processor.run_camera()
 
+        self.focus_controller = FocusController(
+            stage=self.stage_controller,
+            frame_processor=self.frame_processor,
+            disable_buttons=self.disable_buttons,
+            enable_buttons=self.enable_buttons,
+        )
+
+        self.turret = turret(TURRET_COM_PORT)
+        self.turret_controller = TurretController( 
+            stage=self.stage_controller,
+            turret=self.turret,
+            auto_focus=self.focus_controller.auto_focus,
+            enable_buttons=self.enable_buttons,
+            disable_buttons=self.disable_buttons,
+            set_magnification=self.set_magnification
+        )
+
         self.scan_manager = ScanManager(
             root=self.root,
             home_dir=home_dir,
             stage=self.stage_controller,
-            turret=self.turret,
-            camera=self.frame_processor.get_camera,
+            turret_controller=self.turret_controller,
+            camera=self.frame_processor.get_camera(),
             frame_processor=self.frame_processor,
             get_view_mode=lambda: self.view_mode,
             get_filter_status=self.filter_var.get,
@@ -134,13 +131,6 @@ class App:
             set_filter_map=self.set_filter_map,
         )
 
-        self.focus_controller = FocusController(
-            stage=self.stage_controller,
-            frame_processor=self.frame_processor,
-            disable_buttons=self.disable_buttons,
-            enable_buttons=self.enable_buttons,
-        )
-
         self.stage_controller_control_panel = StageControlPanel(
             parent=self.main_frame,
             root=self.root,
@@ -150,12 +140,54 @@ class App:
             register_button=self.buttons.append
         )
 
+        self.objective_control_panel = ObjectiveControlPanel(
+            parent=self.main_frame,
+            stage_controller=self.stage_controller,
+            turret_controller=self.turret_controller,
+            set_magnification=self.set_magnification,
+            register_button=self.buttons.append,
+        )
+
+        self.capture_panel = CapturePanel(
+            parent=self.main_frame,
+            save_image=self.frame_processor.save_image,
+            get_true_map=self.get_true_map,
+            register_button=self.buttons.append,
+        )
+
+        self.exposure_panel = ExposurePanel(
+            parent=self.main_frame,
+            get_camera=self.frame_processor.get_camera,
+        )
+
+        self.focus_panel = FocusPanel(
+            parent=self.main_frame,
+            focus_controller=self.focus_controller,
+            register_button=self.buttons.append,
+        )
+        
+        self.view_scans_panel = ViewScansPanel(
+            parent=self.main_frame,
+            root=self.root,
+            set_view=self.set_view,
+            get_view_mode=lambda: self.view_mode,
+            display_image=self.display_image,
+        )
+
+        self.focus_controller.sharpness_callback = self.focus_panel.update_sharpness
+
+        self.panels.append({
+            "name": "Info Panel",
+            "frame": self.scan_info_panel.frame,
+            "var": BooleanVar(value=False)
+        })
+
         self.panels.append({
             "name": "Stage Control Panel",
             "frame": self.stage_controller_control_panel.frame,
             "var": BooleanVar(value=False)
         })
-
+        
         self.panels.append({
             "name": "Capture Panel",
             "frame": self.init_capture_panel(),
@@ -168,28 +200,11 @@ class App:
             "var": BooleanVar(value=False)
         })
 
-        self.objective_control_panel = ObjectiveControlPanel(
-            parent=self.main_frame,
-            stage=self.stage_controller,
-            turret=self.turret,
-            get_magnification=lambda: self.magnification,
-            set_magnification=self.set_magnification,
-            auto_focus=self.focus_controller.auto_focus,
-        )
-
         self.panels.append({
             "name": "Objective Control Panel",
             "frame": self.objective_control_panel.frame,
             "var": BooleanVar(value=False)
         })
-
-        self.focus_panel = FocusPanel(
-            parent=self.main_frame,
-            focus_controller=self.focus_controller,
-            register_button=self.buttons.append,
-        )
-
-        self.focus_controller.sharpness_callback = self.focus_panel.update_sharpness
 
         self.panels.append({
             "name": "Focus Panel",
@@ -198,9 +213,6 @@ class App:
         })
 
         self.update_panels()
-
-        self.init_view_scans_panel()
-        self.view_scans_panel.place_forget()
 
         self.init_menu_bar()
 
@@ -249,215 +261,11 @@ class App:
         scan_menu.add_command(label="Run 10x Scan", command=self.scan_manager.run_10x_scan)
         menu_bar.add_cascade(label="Scan", menu=scan_menu)
 
-        self.results_menu = Menu(menu_bar, tearoff=0)
-
-        self.results_menu.add_command(label="Open Scan...", command=self.open_scan)
-        self.results_menu.add_separator()
-
-        self.open_scan_menu = Menu(self.results_menu, tearoff=0)
-        self.open_scan_menu.add_command(label="Raw Images (2x)", command=lambda: self.set_view_folder("Raw 2x"))
-        self.open_scan_menu.add_command(label="Raw Images (10x)", command=lambda: self.set_view_folder("Raw 10x"))
-        self.open_scan_menu.add_command(label="Processed Images (10x)", command=lambda: self.set_view_folder("Processed 10x"))
-        self.open_scan_menu.add_command(label="Detected Flakes", command=lambda: self.set_view_folder("Flakes Found"))
-        self.results_menu.add_cascade(label="View Scan", state="disabled", menu=self.open_scan_menu)
-        self.results_menu.add_command(label="Classify Flakes", state="disabled", command=None)
-        menu_bar.add_cascade(label="Results", menu=self.results_menu)
+        self.view_scans_panel.add_to_menu(menu_bar)
 
         root.config(menu=menu_bar)
 
     # Panel Initialization 
-
-    def init_capture_panel(self):
-
-        self.capture_panel = Frame(
-            self.main_frame,
-            bg="#f0f0f0",
-            width=204,
-            height=120
-        )
-        self.capture_panel.place(relx=1.0, rely=0.0, anchor="ne")
-
-        self.capture_background = Frame(
-            self.capture_panel,
-            bg="white",
-            width=200,
-            height=118
-        )
-        self.capture_background.place(x=2, y=0)
-
-        capture_title = Label(
-            self.capture_panel,
-            text="Capture",
-            bg="white",
-            fg="black",
-            font=("TkDefaultFont", 13)
-        )
-        capture_title.place(relx=0.5, y=10, anchor="n")
-
-        style = ttk.Style()
-        style.configure("Save.TButton", background="white")
-        style.configure("Save.TButton", relief="flat")
-
-        self.capture_image_button = ttk.Button(
-            self.capture_background,
-            text="Save Image",
-            style="Save.TButton",
-            command=self.frame_processor.save_image
-        )
-        self.capture_image_button.place(relx=0.5, y=55, anchor="center")
-        self.buttons.append(self.capture_image_button)
-
-        self.capture_map_button = ttk.Button(
-            self.capture_background,
-            text="Save Map",
-            style="Save.TButton",
-            command=lambda: self.frame_processor.save_image(image=cv2.cvtColor(self.true_map, cv2.COLOR_RGB2BGR))
-        )
-        self.capture_map_button.place(relx=0.5, y=90, anchor="center")
-        self.buttons.append(self.capture_map_button)
-
-        return self.capture_panel
-    
-    def init_adjust_exposure_panel(self):
-        self.adjust_exposure_panel = Frame(
-            self.main_frame,
-            bg="#f0f0f0",
-            width=204,
-            height=100
-        )
-        self.adjust_exposure_panel.place(relx=1.0, rely=0.0, anchor="ne")
-
-        self.adjust_exposure_background = Frame(
-            self.adjust_exposure_panel,
-            bg="white",
-            width=200,
-            height=98
-        )
-        self.adjust_exposure_background.place(x=2, y=0)
-
-        adjust_exposure_title = Label(
-            self.adjust_exposure_panel,
-            text="Adjust Exposure",
-            bg="white",
-            fg="black",
-            font=("TkDefaultFont", 13)
-        )
-        adjust_exposure_title.place(relx=0.5, y=5, anchor="n")
-
-        style = ttk.Style()
-        style.configure("Custom.Horizontal.TScale", background="white")
-
-        self.exposure_var = DoubleVar(value=config.DEFAULT_EXPOSURE)
-        self.adjust_exposure_slider = ttk.Scale(
-            self.adjust_exposure_background,
-            from_=30,
-            to=120,
-            orient="horizontal",
-            variable=self.exposure_var,
-            command=self.adjust_exposure,
-            style="Custom.Horizontal.TScale"
-        )
-        self.adjust_exposure_slider.place(relx=0.5, y=50, anchor="center")
-
-        self.exposure_value_label = Label(
-            self.adjust_exposure_background,
-            text=f"Exposure: {config.DEFAULT_EXPOSURE}",
-            bg="white",
-            fg="black",
-            font=("TkDefaultFont", 8)
-        )
-        self.exposure_value_label.place(relx=0.5, y=70, anchor="n")
-
-        return self.adjust_exposure_panel
- 
-    def init_view_scans_panel(self):
-
-        self.pos_scan_name = 40
-        self.pos_chip = 70
-        self.pos_image = 100
-        self.pos_buttons = 140
-
-        self.view_scans_panel = Frame(
-            self.main_frame,
-            bg="#f0f0f0",
-            width=204,
-            height=205
-        )
-        self.view_scans_panel.place(relx=0.0, rely=0.0, anchor="nw")
-
-        self.view_scans_background = Frame(
-            self.view_scans_panel,
-            bg="white",
-            width=200,
-            height=203
-        )
-        self.view_scans_background.place(x=2, y=0)
-
-        view_scans_title = Label(
-            self.view_scans_panel,
-            text="Scan Results",
-            bg="white",
-            fg="black",
-            font=("TkDefaultFont", 13)
-        )
-        view_scans_title.place(relx=0.5, y=5, anchor="n")
-
-        self.scan_name_var = tk.StringVar()
-        self.scan_name_var.set("Scan: Not Selected")
-
-        self.scan_name_label = Label(
-            self.view_scans_panel,
-            textvariable=self.scan_name_var,
-            bg="white",
-            fg="black",
-            font="TkDefaultFont"
-        )
-        self.scan_name_label.place(relx=0.5, y=self.pos_scan_name, anchor="n")
-
-        self.chip_var = tk.StringVar()
-
-        self.chip_dropdown = ttk.Combobox(
-            self.view_scans_panel,
-            textvariable=self.chip_var,
-            state="readonly"
-        )
-
-        self.chip_dropdown.place(relx=0.5, y=self.pos_chip, anchor="n")
-
-        self.image_var = tk.StringVar()
-        self.image_var.set("Image: None")
-
-        self.image_label = Label(
-            self.view_scans_panel,
-            textvariable=self.image_var,
-            bg="white",
-            fg="black",
-            font="TkDefaultFont"
-        )
-        self.image_label.place(relx=0.5, y=self.pos_image, anchor="n")
-
-        self.views_scans_button_panel = Frame(self.view_scans_panel, bg="white", width=80, height=45)
-        self.views_scans_button_panel.place(relx=0.5, x=0, y=self.pos_buttons, anchor="n")
-        self.views_scans_button_panel.pack_propagate(False)
-
-        view_scans_controls = Frame(self.views_scans_button_panel, bg="white")
-        view_scans_controls.pack(expand=True, fill="both")
-
-        self.btn_next = ttk.Button(view_scans_controls, text="▸", style="Arrow.TButton")
-        self.btn_previous = ttk.Button(view_scans_controls, text="◂", style="Arrow.TButton")
-
-        self.btn_next.bind("<ButtonPress-1>", self.next_image)
-        self.btn_previous.bind("<ButtonPress-1>", self.previous_image)
-
-        self.root.bind("<Left>", self.previous_image)
-        self.root.bind("<Right>", self.next_image)
-
-        view_scans_controls.rowconfigure(0, weight=1)
-        view_scans_controls.columnconfigure(0, weight=1)
-        view_scans_controls.columnconfigure(1, weight=1)
-
-        self.btn_next.grid(row=0, column=1, sticky="nsew")
-        self.btn_previous.grid(row=0, column=0, sticky="nsew")
 
     def display_chip_dropdown(self, display=True):
 
@@ -479,50 +287,6 @@ class App:
 
     def set_magnification(self, magnification):
         self.magnification = magnification
-
-    # ------------- View Scan Functions -------------
-
-    def previous_image(self, event=None):
-
-        if self.view_mode != "Scan Results":
-            return
-
-        if self.image_files is None:
-            return
-
-        self.view_image_index = (self.view_image_index - 1) % len(self.image_files)
-
-        self.image_var.set(f"Image: {self.image_files[self.view_image_index].name}")
-
-        img_path = self.image_files[self.view_image_index]
-
-        img = cv2.imread(str(img_path))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-        self.display_image(img)
-
-        self.root.focus_set()
-
-    def next_image(self, event=None):
-        
-        if self.view_mode != "Scan Results":
-            return
-
-        if self.image_files is None:
-            return
-
-        self.view_image_index = (self.view_image_index + 1) % len(self.image_files)
-
-        self.image_var.set(f"Image: {self.image_files[self.view_image_index].name}")
-
-        img_path = self.image_files[self.view_image_index]
-
-        img = cv2.imread(str(img_path))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-        self.display_image(img)
-
-        self.root.focus_set()
 
     # ------------- Display Functions -------------
 
@@ -655,10 +419,6 @@ class App:
         self.img_label.configure(image=img_tk)
         self.img_label.image = img_tk
 
-    def adjust_exposure(self, exposure):
-        self.hcam.put_AutoExpoTarget(int(float(exposure)))
-        self.exposure_value_label.config(text=f"Exposure: {int(float(self.hcam.get_AutoExpoTarget()))}")
-
     # ------------- Util Functions -------------
 
     def update_panels(self):
@@ -696,104 +456,6 @@ class App:
         for btn in self.buttons:
             btn.state(["disabled"])
         self.root.update_idletasks()
-
-    def open_scan(self):
-        folder = filedialog.askdirectory(title="Select Scan Folder")
-        if not folder:
-            return
-
-        path = Path(folder)
-        folder_name = path.name
-
-        pattern = r"^Full Scan \(\d{4}-\d{2}-\d{2}\) \(\d{2}-\d{2}-\d{2}\)$"
-
-        if not re.match(pattern, folder_name):
-            messagebox.showwarning(
-                "Invalid Folder",
-                "Selected folder is not a valid scan folder."
-            )
-            return
-
-        self.view_scan_path = path
-
-        self.scan_name_var.set(f"{folder_name}")
-
-        self.results_menu.entryconfig("View Scan", state="normal")
-        self.results_menu.entryconfig("Classify Flakes", state="normal") 
-
-        messagebox.showinfo(
-            "Scan Loaded",
-            f"Scan loaded successfully!"
-        )
-    
-    def set_view_folder(self, selected_view):
-
-        self.set_view("Scan Results", False)
-        
-        self.view_scans_panel.place(relx=0.0, rely=0.0, anchor="nw")
-        
-        self.view_chip_index = 0
-        self.view_image_index = 0
-        
-        base_path = self.view_scan_path / "All Images"
-
-        if selected_view == "Raw 2x":
-            self.view_folder = base_path / "2x" / "Raw"
-            self.display_chip_dropdown(False)
-
-        elif selected_view == "Raw 10x":
-            chip_folder = self.get_subfolder(base_path / "10x", self.view_chip_index).name
-            self.view_folder = base_path / "10x" / chip_folder / "Raw"
-            self.display_chip_dropdown(True)
-            self.populate_chips_dropdown()            
-
-        elif selected_view == "Processed 10x":
-            chip_folder = self.get_subfolder(base_path / "10x", self.view_chip_index).name
-            self.view_folder = base_path / "10x" / chip_folder / "Processed"
-            self.display_chip_dropdown(True)
-            self.populate_chips_dropdown() 
-
-        elif selected_view == "Flakes Found":
-            chip_folder = self.get_subfolder(self.view_scan_path / "Flakes Found", self.view_chip_index).name
-            self.view_folder = self.view_scan_path / "Flakes Found" / chip_folder
-            self.display_chip_dropdown(True)
-            self.populate_chips_dropdown()
-
-        self.image_files = sorted([p for p in self.view_folder.iterdir() if p.suffix.lower() in [".png", ".jpg", ".jpeg", ".bmp"]], key=self.image_sort_key)
-
-        img_path = self.image_files[self.view_image_index]
-
-        img = cv2.imread(str(img_path))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-        self.display_image(img)
-        self.root.update()
-
-    def populate_chips_dropdown(self):
-        chip_root = self.view_scan_path / "All Images" / "10x"
-
-        if not chip_root.exists():
-            self.chip_dropdown["values"] = []
-            self.chip_var.set("No chips found")
-            return
-
-        chips = sorted([p.name for p in chip_root.iterdir() if p.is_dir()])
-
-        self.chip_dropdown["values"] = chips
-
-        if chips:
-            self.chip_var.set(chips[0])
-        else:
-            self.chip_var.set("No chips found")
-
-    def image_sort_key(self, p):
-        match = re.search(r'_(\d+)\.', p.name)
-        return int(match.group(1)) if match else -1
-
-    def get_subfolder(self, path, index):
-        subfolders = [p for p in path.iterdir() if p.is_dir()]
-        subfolders = sorted(subfolders)
-        return subfolders[index] if 0 <= index < len(subfolders) else None
 
     def clear_focus(self, event):
         widget = event.widget
