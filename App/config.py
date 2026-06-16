@@ -1,38 +1,94 @@
-DEFAULT_EXPOSURE = 60
-
-CENTER_CROP_WIDTH_RATIO_2X = 0.7
-CENTER_CROP_HEIGHT_RATIO_2X = 0.7
-
-CENTER_CROP_WIDTH_RATIO_10X = 0.9
-CENTER_CROP_HEIGHT_RATIO_10X = 0.9
-
-CENTER_CROP_WIDTH_RATIO_20X = 1
-CENTER_CROP_HEIGHT_RATIO_20X = 1
-
-CENTER_CROP_WIDTH_RATIO_100X = 1
-CENTER_CROP_HEIGHT_RATIO_100X = 1
-
-RELATIVE_2X_Z = 0
-RELATIVE_10X_Z = 1250
-RELATIVE_20X_Z = 4300
-RELATIVE_100X_Z = 4300
-
-X_SIZE_2 = 10642
-Y_SIZE_2 = 7027
-
-X_SIZE_10 = 2142 
-Y_SIZE_10 = 1359
-
-MAGNIFICATION = 2
-
-IMAGE_UM_PER_PIXEL_2X_MED = 3.8569 # um
-IMAGE_UM_PER_PIXEL_10X_MED = 0.76609 # um
-
 import os
 from pathlib import Path
 
 import cv2
 
-home_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+HOME_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
 
-FLATFIELD_IMG = cv2.imread(str(home_dir / "Flatfields" / "flatfield_2x_med_smoothed.png"))
+FLATFIELD_IMG = cv2.imread(str(HOME_DIR / "Flatfields" / "flatfield_2x_med_smoothed.png"))
+
+DEFAULT_EXPOSURE = 60
+
+CROP_RATIO = {
+    "2x": {
+        "x": 0.7,
+        "y": 0.7,
+    },
+    "10x": {
+        "x": 0.7,
+        "y": 0.7,
+    },
+    "20x": {
+        "x": 1.0,
+        "y": 1.0,
+    },
+    "100x": {
+        "x": 0.7,
+        "y": 0.7,
+    },
+}
+
+RELATIVE_Z = {
+    "2X": 0,
+    "10X": 1250,
+    "20X": 4300,
+    "100X": 4300
+}
+
+CROP_RATIO = {
+    "2x": {
+        "x": 0.7,
+        "y": 0.7,
+    },
+    "10x": {
+        "x": 0.7,
+        "y": 0.7,
+    },
+    "20x": {
+        "x": 1.0,
+        "y": 1.0,
+    },
+    "100x": {
+        "x": 0.7,
+        "y": 0.7,
+    },
+}
+
+RESOLUTION_DIM = {
+    "LOW": {
+        "x": 1824,
+        "y": 1216,
+    },
+    "MED": {
+        "x": 2736,
+        "y": 1824,
+    },
+    "HIGH": {
+        "x": 5440,
+        "y": 3648,
+    }
+}
+
+PIXEL_SIZE = {
+    "2x": {
+        "LOW": 1.162453,
+        "MED": 0.768964,
+        "HIGH": 0.385936,
+    },
+    "10x": {
+        "LOW": 0.230062,
+        "MED": 0.152501,
+        "HIGH": 0.076746,
+    },
+    "20x": {
+        "LOW": 0.117185,
+        "MED": 0.078098,
+        "HIGH": 0.039048,
+    },
+    "100x": {
+        "LOW": 0.0231928,
+        "MED": 0.0154422,
+        "HIGH": 0.00773423,
+    },
+}
+

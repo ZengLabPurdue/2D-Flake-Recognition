@@ -1,4 +1,4 @@
-import config
+from config import RELATIVE_Z
 from Hardware.turret_api import turret
 
 class TurretController:
@@ -27,11 +27,11 @@ class TurretController:
 
     def change_objective(self, position):
         objective_map = {
-            1: ("2x", config.RELATIVE_2X_Z),
-            2: ("10x", config.RELATIVE_10X_Z),
-            3: ("20x", config.RELATIVE_20X_Z),
-            4: (None, config.RELATIVE_20X_Z),
-            5: ("100x", config.RELATIVE_100X_Z),
+            1: ("2x", RELATIVE_Z["2x"]),
+            2: ("10x", RELATIVE_Z["10x"]),
+            3: ("20x", RELATIVE_Z["20x"]),
+            4: (None, None),
+            5: ("100x", RELATIVE_Z["100x"]),
         }
 
         self.disable_buttons()

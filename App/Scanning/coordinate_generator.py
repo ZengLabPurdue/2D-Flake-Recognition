@@ -1,6 +1,6 @@
 import math
 import cv2
-import config
+from config import PIXEL_SIZE, CROP_RATIO, RESOLUTION_DIM
 
 def generate_rect_coords(x, y):
     rect_coords = []
@@ -58,8 +58,9 @@ def generate_10x_scan_coordinates(
 ):
     camera_width, camera_height = camera_size
 
-    window_w = int(camera_width * config.CENTER_CROP_WIDTH_RATIO_2X / scale / (config.IMAGE_UM_PER_PIXEL_2X_MED / config.IMAGE_UM_PER_PIXEL_10X_MED) / config.CENTER_CROP_WIDTH_RATIO_10X)
-    window_h = int(camera_height * config.CENTER_CROP_HEIGHT_RATIO_2X / scale / (config.IMAGE_UM_PER_PIXEL_2X_MED / config.IMAGE_UM_PER_PIXEL_10X_MED) / config.CENTER_CROP_HEIGHT_RATIO_10X)
+    #TODO: Pass resolution
+    window_w = int(camera_width * CROP_RATIO["2x"]["x"] / scale / (PIXEL_SIZE["2x"]["MED"] / PIXEL_SIZE["2x"]["MED"]) / CROP_RATIO["10x"]["x"])
+    window_h = int(camera_height * CROP_RATIO["2x"]["y"] / scale / (PIXEL_SIZE["2x"]["MED"] / PIXEL_SIZE["2x"]["MED"]) / CROP_RATIO["10x"]["y"])
 
     scan_coordinates_10x = []
 
@@ -78,8 +79,9 @@ def generate_10x_scan_coordinates(
         start_x = max(0, wafer_center_x - grid_w // 2)
         start_y = max(0, wafer_center_y - grid_h // 2)
 
-        start_pos_x = -(wafer_center_x - true_map.shape[1] / 2) * (config.X_SIZE_2 * config.CENTER_CROP_WIDTH_RATIO_2X) / (camera_width / scale * config.CENTER_CROP_WIDTH_RATIO_2X) + scan_center_x
-        start_pos_y = -(wafer_center_y - true_map.shape[0] / 2) * (config.Y_SIZE_2 * config.CENTER_CROP_HEIGHT_RATIO_2X) / (camera_height / scale * config.CENTER_CROP_HEIGHT_RATIO_2X) + scan_center_y
+        #TODO: Pass resolution
+        start_pos_x = -(wafer_center_x - true_map.shape[1] / 2) * (PIXEL_SIZE["2x"]["MED"] * RESOLUTION_DIM["2x"]["x"] * CROP_RATIO["2x"]["x"]) / (camera_width / scale * CROP_RATIO["2x"]["x"]) + scan_center_x
+        start_pos_y = -(wafer_center_y - true_map.shape[0] / 2) * (PIXEL_SIZE["2x"]["MED"] * RESOLUTION_DIM["2x"]["y"] * CROP_RATIO["2x"]["y"]) / (camera_height / scale * CROP_RATIO["2x"]["y"]) + scan_center_y
 
         scan_coordinates_10x.append([round(start_pos_x), round(start_pos_y), num_windows_x, num_windows_y,])
 

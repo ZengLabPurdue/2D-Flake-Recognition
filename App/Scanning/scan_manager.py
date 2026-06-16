@@ -6,7 +6,7 @@ from datetime import datetime
 import cv2
 import numpy as np
 
-import config
+from config import PIXEL_SIZE, RESOLUTION_DIM, CROP_RATIO, FLATFIELD_IMG
 from Imaging import vignetting_corrector
 
 from . import wafer_detection
@@ -143,8 +143,9 @@ class ScanManager:
             self.update_scan_status(scan_type="2x Scan", stage="2x Scan", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
 
         for i, (offset_x, offset_y) in enumerate(coords, start=1):
-            target_x = (center_x + offset_x * config.X_SIZE_2 * config.CENTER_CROP_WIDTH_RATIO_2X)
-            target_y = (center_y - offset_y * config.Y_SIZE_2 * config.CENTER_CROP_HEIGHT_RATIO_2X)
+            # TODO: Pass resolution
+            target_x = (center_x + offset_x * PIXEL_SIZE["2x"]["MED"] * RESOLUTION_DIM["2x"]["x"] * CROP_RATIO["10x"]["x"])
+            target_y = (center_y - offset_y * PIXEL_SIZE["2x"]["MED"] * RESOLUTION_DIM["2x"]["y"] * CROP_RATIO["2x"]["y"])
 
             self.stage.move_to_xy(target_x, target_y)
             self.stage.wait_until_not_busy()
@@ -234,7 +235,7 @@ class ScanManager:
             x, y, _ = self.stage.get_position()
             scan_coordinates_10x = [[x, y, 10, 10]]
 
-        cropped_flatfield = self.frame_processor.crop_frame(config.FLATFIELD_IMG)
+        cropped_flatfield = self.frame_processor.crop_frame(FLATFIELD_IMG)
 
         for i, coordinates in enumerate(scan_coordinates_10x, start=1):
             wafer_time = time.time()
@@ -259,8 +260,8 @@ class ScanManager:
             max_zoom = max(zoom, int(camera_height / (self.get_true_map().shape[0] / coordinates[3])), int(camera_width / (self.get_true_map().shape[1] / coordinates[2])))
 
             for j, (offset_x, offset_y) in enumerate(coords):
-                target_x = center_x + offset_x * config.X_SIZE_10 * config.CENTER_CROP_WIDTH_RATIO_10X
-                target_y = center_y - offset_y * config.Y_SIZE_10 * config.CENTER_CROP_HEIGHT_RATIO_10X
+                target_x = center_x + offset_x * PIXEL_SIZE["10x"]["MED"] * RESOLUTION_DIM["10x"]["x"] * CROP_RATIO["10x"]["x"]
+                target_y = center_y - offset_y * PIXEL_SIZE["10x"]["MED"] * RESOLUTION_DIM["10x"]["y"] * CROP_RATIO["10x"]["y"]
 
                 self.stage.move_to_xy(target_x, target_y)
                 self.stage.wait_until_not_busy()

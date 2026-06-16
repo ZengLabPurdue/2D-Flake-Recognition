@@ -1,28 +1,18 @@
-from collections import deque
 import os
 import sys
-import re
-import threading
-from queue import Queue
 
-import time
-from datetime import datetime
-
-import math
-from tkinter import filedialog
-from tkinter import messagebox
 import cv2
 import numpy as np
 
 from tkinter import *
 import tkinter as tk
 from tkinter import ttk
-import tkinter.font as tkFont
 from PIL import Image, ImageTk
 
 from pathlib import Path
 
-import config
+from config import CROP_RATIO
+
 from Scanning.scan_manager import ScanManager
 from Hardware.stage_controller import StageController
 from Hardware.turret_api import turret
@@ -190,13 +180,13 @@ class App:
         
         self.panels.append({
             "name": "Capture Panel",
-            "frame": self.init_capture_panel(),
+            "frame": self.capture_panel.frame,
             "var": BooleanVar(value=False)
         })
 
         self.panels.append({
             "name": "Adjust Exposure Panel",
-            "frame": self.init_adjust_exposure_panel(),
+            "frame": self.exposure_panel.frame,
             "var": BooleanVar(value=False)
         })
 
@@ -265,8 +255,6 @@ class App:
 
         root.config(menu=menu_bar)
 
-    # Panel Initialization 
-
     def display_chip_dropdown(self, display=True):
 
         shift = 0 if display else -30
@@ -309,33 +297,6 @@ class App:
 
         self.root.update()
 
-    def draw_map(self):
-        map_img = Image.fromarray(self.filter_map, mode="L")
-
-        canvas_w = self.map_canvas.winfo_width()
-        canvas_h = self.map_canvas.winfo_height()
-
-        if canvas_w <= 1 or canvas_h <= 1:
-            self.root.after(100, self.draw_map)
-            return
-
-        scale = min(canvas_w / map_img.width, canvas_h / map_img.height, 1.0)
-        new_w = int(map_img.width * scale)
-        new_h = int(map_img.height * scale)
-        map_img_resized = map_img.resize((new_w, new_h), Image.Resampling.NEAREST)
-
-        self.map_tk = ImageTk.PhotoImage(map_img_resized)
-
-        x_center = canvas_w // 2
-        y_center = canvas_h // 2
-
-        self.map_canvas.delete("all")
-        self.map_canvas.create_image(
-            x_center, y_center,
-            anchor="center",
-            image=self.map_tk
-        )
-
     def display_map(self):
         if self.filter_var.get():
             self.map_image = Image.fromarray(self.filter_map.astype(np.uint8))
@@ -376,17 +337,17 @@ class App:
 
         if self.view_mode == "Camera View":
             if self.magnification == "2x":
-                crop_w = int(w * config.CENTER_CROP_WIDTH_RATIO_2X)
-                crop_h = int(h * config.CENTER_CROP_HEIGHT_RATIO_2X)
+                crop_w = int(w * CROP_RATIO["2x"]["x"])
+                crop_h = int(h * CROP_RATIO["2x"]["y"])
             elif self.magnification == "10x":
-                crop_w = int(w * config.CENTER_CROP_WIDTH_RATIO_10X)
-                crop_h = int(h * config.CENTER_CROP_HEIGHT_RATIO_10X)
+                crop_w = int(w * CROP_RATIO["10x"]["x"])
+                crop_h = int(h * CROP_RATIO["10x"]["y"])
             elif self.magnification == "20x":
-                crop_w = int(w * config.CENTER_CROP_WIDTH_RATIO_20X)
-                crop_h = int(h * config.CENTER_CROP_HEIGHT_RATIO_20X)
+                crop_w = int(w * CROP_RATIO["20x"]["x"])
+                crop_h = int(h * CROP_RATIO["20x"]["y"])
             elif self.magnification == "100x":
-                crop_w = int(w * config.CENTER_CROP_WIDTH_RATIO_100X)
-                crop_h = int(h * config.CENTER_CROP_HEIGHT_RATIO_100X)
+                crop_w = int(w * CROP_RATIO["100x"]["x"])
+                crop_h = int(h * CROP_RATIO["100x"]["y"])
             else:
                 crop_w = w
                 crop_h = h

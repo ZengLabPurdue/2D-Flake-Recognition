@@ -7,7 +7,7 @@ from tkinter import ttk
 from tkinter import filedialog
 
 home_dir = os.path.dirname(os.path.abspath(__file__))
-scanner_path = Path(home_dir) / "scanner.py"
+scanner_path = Path(home_dir) / "app.py"
 mapper_path = Path(home_dir) / "mapper.py"
 os.chdir(home_dir)
 
