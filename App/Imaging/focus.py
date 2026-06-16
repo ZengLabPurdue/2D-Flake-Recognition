@@ -4,17 +4,15 @@ import cv2
 class FocusController:
     def __init__(
         self,
+        app,
         stage,
         frame_processor,
-        disable_buttons=None,
-        enable_buttons=None,
         sharpness_callback=None,
     ):
+        self.app = app
         self.stage = stage
         self.frame_processor = frame_processor
 
-        self.disable_buttons = disable_buttons or (lambda: None)
-        self.enable_buttons = enable_buttons or (lambda: None)
         self.sharpness_callback = sharpness_callback or (lambda sharpness: None)
 
     def find_sharpness(self, image):
@@ -98,7 +96,7 @@ class FocusController:
     def auto_focus(self, start_range=3000, accuracy=50, steps=20):
         start_time = time.time()
 
-        self.disable_buttons()
+        self.app.disable_buttons()
 
         try:
             search_range = start_range
@@ -130,4 +128,4 @@ class FocusController:
             print(f"Time taken: {time.time() - start_time:.2f}s")
 
         finally:
-            self.enable_buttons()
+            self.app.enable_buttons()

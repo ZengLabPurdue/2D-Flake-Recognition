@@ -7,6 +7,8 @@ import time
 import cv2
 import numpy as np
 
+from config import HOME_DIR, CROP_RATIO
+
 from . import amcam
 from . import chip_edge_classifier
 
@@ -16,33 +18,17 @@ class FrameProcessor:
     def __init__(
         self, 
         root, 
+        app,
         stage, 
-        home_dir, 
-        get_view_mode, 
-        get_filter_status, 
-        get_magnification, 
         #get_live_mapping_status, 
-        display_image, 
-        display_map, 
         #place_live_frame_on_map,
-        disable_buttons=None, 
-        enable_buttons=None
     ):
         self.root = root
+        self.app = app
         self.stage = stage
-        self.home_dir = Path(home_dir)
 
-        self.get_view_mode = get_view_mode
-        self.get_filter_status = get_filter_status
-        self.get_magnification = get_magnification
         #self.get_live_mapping_status = get_live_mapping_status
-
-        self.display_image = display_image
-        self.display_map = display_map
         #self.place_live_frame_on_map = place_live_frame_on_map #TODO: Re-add mapping
-
-        self.disable_buttons = disable_buttons or (lambda: None)
-        self.enable_buttons = enable_buttons or (lambda: None)
 
         self.hcam = None
         self.buf = None
@@ -132,18 +118,16 @@ class FrameProcessor:
                     #self.place_live_frame_on_map(cropped, zoom=3)
             '''
 
-            view_mode = self.get_view_mode()
-
-            if view_mode == "Camera View":
-                if self.get_filter_status():
+            if self.app.view_mode == "Camera View":
+                if self.app.filter_var.get():
                     display = cv2.cvtColor(chip_edge_classifier.chip_filter(img), cv2.COLOR_GRAY2RGB)
                 else:
                     display = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-                self.display_image(display)
+                self.app.display_image(display)
 
-            elif view_mode == "Map":
-                self.display_map()
+            elif self.app.view_mode == "Map":
+                self.app.display_map()
 
         except Exception as ex:
             print("Frame processing error:", ex)
@@ -224,7 +208,7 @@ class FrameProcessor:
     def change_resolution(self, index):
         self.resolution = index
 
-        self.disable_buttons()
+        self.app.disable_buttons()
 
         try:
             if self.hcam is not None:
@@ -256,7 +240,7 @@ class FrameProcessor:
             print(f"Current Resolution: ({self.width}, {self.height})")
 
         finally:
-            self.enable_buttons()
+            self.app.enable_buttons()
 
     def capture_frame(self, num_images=2):
         if len(self.frame_buffer) == 0:
@@ -357,20 +341,18 @@ class FrameProcessor:
     def crop_frame(self, frame):
         h, w = frame.shape[:2]
 
-        magnification = self.get_magnification()
-
-        if magnification == "2x":
-            crop_w = int(w * 0.7) #TODO: Reference config
-            crop_h = int(h * 0.7)
-        elif magnification == "10x":
-            crop_w = int(w * 0.9)
-            crop_h = int(h * 0.9)
-        elif magnification == "20x":
-            crop_w = w
-            crop_h = h
-        elif magnification == "100x":
-            crop_w = w
-            crop_h = h
+        if self.app.magnification == "2X":
+            crop_w = int(w * CROP_RATIO["2X"]["x"])
+            crop_h = int(h * CROP_RATIO["2X"]["y"])
+        elif self.app.magnification == "10X":
+            crop_w = int(w * CROP_RATIO["10X"]["x"])
+            crop_h = int(h * CROP_RATIO["10X"]["y"])
+        elif self.app.magnification == "20X":
+            crop_w = int(w * CROP_RATIO["20X"]["x"])
+            crop_h = int(h * CROP_RATIO["20X"]["y"])
+        elif self.app.magnification == "100X":
+            crop_w = int(w * CROP_RATIO["100X"]["x"])
+            crop_h = int(h * CROP_RATIO["100X"]["y"])
         else:
             crop_w = w
             crop_h = h
@@ -393,7 +375,7 @@ class FrameProcessor:
             return None
 
         if save_dir is None:
-            save_dir = self.home_dir / "Saved Images"
+            save_dir = HOME_DIR / "Saved Images"
         else:
             save_dir = Path(save_dir)
 

@@ -49,6 +49,7 @@ def generate_spiral_coords(length):
     return spiral_coords, total_frames
 
 def generate_10x_scan_coordinates(
+    app,
     wafers,
     scan_center_x,
     scan_center_y,
@@ -58,9 +59,9 @@ def generate_10x_scan_coordinates(
 ):
     camera_width, camera_height = camera_size
 
-    #TODO: Pass resolution
-    window_w = int(camera_width * CROP_RATIO["2x"]["x"] / scale / (PIXEL_SIZE["2x"]["MED"] / PIXEL_SIZE["2x"]["MED"]) / CROP_RATIO["10x"]["x"])
-    window_h = int(camera_height * CROP_RATIO["2x"]["y"] / scale / (PIXEL_SIZE["2x"]["MED"] / PIXEL_SIZE["2x"]["MED"]) / CROP_RATIO["10x"]["y"])
+    resolution = app.get_resolution()
+    window_w = int(camera_width * CROP_RATIO["2X"]["x"] / scale / (PIXEL_SIZE["2X"][resolution] / PIXEL_SIZE["2X"][resolution]) / CROP_RATIO["10X"]["x"])
+    window_h = int(camera_height * CROP_RATIO["2X"]["y"] / scale / (PIXEL_SIZE["2X"][resolution] / PIXEL_SIZE["2X"][resolution]) / CROP_RATIO["10X"]["y"])
 
     scan_coordinates_10x = []
 
@@ -79,9 +80,8 @@ def generate_10x_scan_coordinates(
         start_x = max(0, wafer_center_x - grid_w // 2)
         start_y = max(0, wafer_center_y - grid_h // 2)
 
-        #TODO: Pass resolution
-        start_pos_x = -(wafer_center_x - true_map.shape[1] / 2) * (PIXEL_SIZE["2x"]["MED"] * RESOLUTION_DIM["2x"]["x"] * CROP_RATIO["2x"]["x"]) / (camera_width / scale * CROP_RATIO["2x"]["x"]) + scan_center_x
-        start_pos_y = -(wafer_center_y - true_map.shape[0] / 2) * (PIXEL_SIZE["2x"]["MED"] * RESOLUTION_DIM["2x"]["y"] * CROP_RATIO["2x"]["y"]) / (camera_height / scale * CROP_RATIO["2x"]["y"]) + scan_center_y
+        start_pos_x = -(wafer_center_x - true_map.shape[1] / 2) * (PIXEL_SIZE["2X"][resolution] * RESOLUTION_DIM[resolution]["x"] * CROP_RATIO["2X"]["x"]) / (camera_width / scale * CROP_RATIO["2X"]["x"]) + scan_center_x
+        start_pos_y = -(wafer_center_y - true_map.shape[0] / 2) * (PIXEL_SIZE["2X"][resolution] * RESOLUTION_DIM[resolution]["y"] * CROP_RATIO["2X"]["y"]) / (camera_height / scale * CROP_RATIO["2X"]["y"]) + scan_center_y
 
         scan_coordinates_10x.append([round(start_pos_x), round(start_pos_y), num_windows_x, num_windows_y,])
 

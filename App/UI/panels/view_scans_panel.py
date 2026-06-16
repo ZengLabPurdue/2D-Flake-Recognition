@@ -11,15 +11,11 @@ class ViewScansPanel:
         self,
         parent,
         root,
-        set_view,
-        get_view_mode,
-        display_image,
+        app,
     ):
         self.parent = parent
         self.root = root
-        self.set_view = set_view
-        self.get_view_mode = get_view_mode
-        self.display_image = display_image
+        self.app = app
 
         self.view_chip_index = 0
         self.view_image_index = 0
@@ -225,7 +221,7 @@ class ViewScansPanel:
             )
             return
 
-        self.set_view("Scan Results", False)
+        self.app.set_view("Scan Results", False)
         self.show()
 
         self.view_chip_index = 0
@@ -310,11 +306,11 @@ class ViewScansPanel:
             return
 
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        self.display_image(img)
+        self.app.display_image(img)
         self.root.update()
 
     def previous_image(self, event=None):
-        if self.get_view_mode() != "Scan Results":
+        if self.app.view_mode != "Scan Results":
             return
 
         if not self.image_files:
@@ -325,7 +321,7 @@ class ViewScansPanel:
         self.root.focus_set()
 
     def next_image(self, event=None):
-        if self.get_view_mode() != "Scan Results":
+        if self.app.view_mode != "Scan Results":
             return
 
         if not self.image_files:

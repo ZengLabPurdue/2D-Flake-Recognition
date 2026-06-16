@@ -2,14 +2,18 @@ import tkinter as tk
 from tkinter import ttk
 
 class StageControlPanel:
-    def __init__(self, parent, root, stage, disable_buttons=None, enable_buttons=None, register_button=None):
+    def __init__(
+            self, 
+            parent, 
+            root, 
+            app,
+            stage, 
+        ):
+
         self.parent = parent
         self.root = root
+        self.app = app
         self.stage = stage
-
-        self.disable_buttons = disable_buttons or (lambda: None)
-        self.enable_buttons = enable_buttons or (lambda: None)
-        self.register_button = register_button or (lambda btn: None)
 
         self.hold_job = None
         self.is_hold = False
@@ -130,7 +134,7 @@ class StageControlPanel:
             command=self.set_origin
         )
         self.reset_button.place(relx=0.5, y=170, anchor="n")
-        self.register_button(self.reset_button)
+        self.app.buttons.append(self.reset_button)
 
         self.move_to_button = ttk.Button(
             panel,
@@ -139,7 +143,7 @@ class StageControlPanel:
             command=self.go_to_position
         )
         self.move_to_button.place(relx=0.5, y=205, anchor="n")
-        self.register_button(self.move_to_button)
+        self.app.buttons.append(self.move_to_button)
 
         # Arrow buttons
         button_panel = tk.Frame(panel, bg="white", width=120, height=90)
@@ -155,7 +159,7 @@ class StageControlPanel:
         self.btn_right = ttk.Button(controls, text="▸", style="Arrow.TButton")
 
         for btn in [self.btn_forward, self.btn_backward, self.btn_left, self.btn_right]:
-            self.register_button(btn)
+            self.app.buttons.append(btn)
 
         self.btn_forward.bind("<ButtonPress-1>", self.on_press_forward)
         self.btn_forward.bind("<ButtonRelease-1>", self.on_release_forward)
@@ -228,7 +232,7 @@ class StageControlPanel:
             command=self.set_z_zero
         )
         self.z_reset_button.place(relx=0.5, y=440, anchor="n")
-        self.register_button(self.z_reset_button)
+        self.app.buttons.append(self.z_reset_button)
 
         self.z_move_to_button = ttk.Button(
             panel,
@@ -237,7 +241,7 @@ class StageControlPanel:
             command=self.go_to_z_position
         )
         self.z_move_to_button.place(relx=0.5, y=475, anchor="n")
-        self.register_button(self.z_move_to_button)
+        self.app.buttons.append(self.z_move_to_button)
 
         z_button_panel = tk.Frame(panel, bg="white", width=80, height=45)
         z_button_panel.place(relx=0.5, y=510, anchor="n")
@@ -255,8 +259,8 @@ class StageControlPanel:
         self.btn_down.bind("<ButtonPress-1>", self.on_press_down)
         self.btn_down.bind("<ButtonRelease-1>", self.on_release_down)
 
-        self.register_button(self.btn_up)
-        self.register_button(self.btn_down)
+        self.app.buttons.append(self.btn_up)
+        self.app.buttons.append(self.btn_down)
 
         z_controls.rowconfigure(0, weight=1)
         z_controls.columnconfigure(0, weight=1)
@@ -270,11 +274,11 @@ class StageControlPanel:
     # ---------------- Position display ----------------
 
     def update_position_display(self):
-        pos = self.stage.get_position()
+        x, y, z = self.stage.get_position()
 
-        self.x_coord_var.set(str(pos.x))
-        self.y_coord_var.set(str(pos.y))
-        self.z_coord_var.set(str(pos.z))
+        self.x_coord_var.set(str(x))
+        self.y_coord_var.set(str(y))
+        self.z_coord_var.set(str(z))
 
     # ---------------- Absolute movement ----------------
 
@@ -287,7 +291,7 @@ class StageControlPanel:
         self.update_position_display()
 
     def go_to_position(self, x=None, y=None):
-        self.disable_buttons()
+        self.app.disable_buttons()
 
         try:
             if x is None:
@@ -300,10 +304,10 @@ class StageControlPanel:
             self.update_position_display()
 
         finally:
-            self.enable_buttons()
+            self.app.enable_buttons()
 
     def go_to_z_position(self, z=None):
-        self.disable_buttons()
+        self.app.disable_buttons()
 
         try:
             if z is None:
@@ -313,7 +317,7 @@ class StageControlPanel:
             self.update_position_display()
 
         finally:
-            self.enable_buttons()
+            self.app.enable_buttons()
 
     # ---------------- Hold movement helpers ----------------
 

@@ -6,15 +6,12 @@ class CapturePanel:
     def __init__(
         self,
         parent,
+        app,
         save_image,
-        get_true_map,
-        register_button,
     ):
         self.parent = parent
+        self.app = app
         self.save_image = save_image
-        self.get_true_map = get_true_map
-        self.register_button = register_button
-
         self.frame = self._build_panel()
 
     def _build_panel(self):
@@ -54,7 +51,7 @@ class CapturePanel:
             command=self.save_image
         )
         self.capture_image_button.place(relx=0.5, y=55, anchor="center")
-        self.register_button(self.capture_image_button)
+        self.app.buttons.append(self.capture_image_button)
 
         self.capture_map_button = ttk.Button(
             background,
@@ -63,11 +60,11 @@ class CapturePanel:
             command=self.save_map
         )
         self.capture_map_button.place(relx=0.5, y=90, anchor="center")
-        self.register_button(self.capture_map_button)
+        self.app.buttons.append(self.capture_map_button)
 
         return frame
 
     def save_map(self):
-        true_map = self.get_true_map()
+        true_map = self.app.get_true_map()
         true_map_bgr = cv2.cvtColor(true_map, cv2.COLOR_RGB2BGR)
         self.save_image(image=true_map_bgr)

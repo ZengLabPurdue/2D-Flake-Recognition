@@ -38,7 +38,7 @@ from prior_api import Prior_Controller
 from turret_api import Turret_Controller
 import vignetting_corrector
 import chip_edge_classifier
-import flake_identifier
+import App.Scanning.flake_identifier as flake_identifier
 import flake_identifier_yolo
 
 DLL_PATH = os.getcwd() + r"\APIs\PriorSDK1.9.2\x64\PriorScientificSDK.dll"

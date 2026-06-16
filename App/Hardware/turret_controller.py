@@ -5,19 +5,15 @@ class TurretController:
 
     def __init__(
         self, 
+        app,
         stage,
         turret,
         auto_focus,
-        enable_buttons,
-        disable_buttons,
-        set_magnification
     ):
+        self.app = app
         self.stage = stage
         self.turret = turret
         self.auto_focus = auto_focus
-        self.enable_buttons = enable_buttons
-        self.disable_buttons = disable_buttons
-        self.set_magnification = set_magnification
 
     def get_position(self):
         return self.turret.check_position()
@@ -27,14 +23,14 @@ class TurretController:
 
     def change_objective(self, position):
         objective_map = {
-            1: ("2x", RELATIVE_Z["2x"]),
-            2: ("10x", RELATIVE_Z["10x"]),
-            3: ("20x", RELATIVE_Z["20x"]),
+            1: ("2X", RELATIVE_Z["2X"]),
+            2: ("10X", RELATIVE_Z["10X"]),
+            3: ("20X", RELATIVE_Z["20X"]),
             4: (None, None),
-            5: ("100x", RELATIVE_Z["100x"]),
+            5: ("100X", RELATIVE_Z["100X"]),
         }
 
-        self.disable_buttons()
+        self.app.disable_buttons()
 
         try:
             current_position = self.get_position()
@@ -66,7 +62,7 @@ class TurretController:
                 # self.auto_focus(start_range=50, accuracy=2, steps=10)
                 pass
 
-            self.set_magnification(magnification)
+            self.app.set_magnification(magnification)
 
         finally:
-            self.enable_buttons()
+            self.app.enable_buttons()

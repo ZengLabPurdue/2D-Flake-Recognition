@@ -6,15 +6,15 @@ class FocusPanel:
     def __init__(
         self,
         parent,
+        app,
         focus_controller,
         default_range=1000,
         default_accuracy=10,
         default_steps=20,
-        register_button=None,
     ):
         self.parent = parent
+        self.app = app
         self.focus_controller = focus_controller
-        self.register_button = register_button or (lambda button: None)
 
         self.default_range = default_range
         self.default_accuracy = default_accuracy
@@ -124,7 +124,7 @@ class FocusPanel:
         )
         self.auto_focus_btn.place(relx=0.5, y=160, anchor="n")
 
-        self.register_button(self.auto_focus_btn)
+        self.app.buttons.append(self.auto_focus_btn)
 
         return panel
 

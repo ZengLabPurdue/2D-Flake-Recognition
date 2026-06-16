@@ -4,12 +4,6 @@ import sys
 import time
 from dataclasses import dataclass
 
-@dataclass
-class StagePosition:
-    x: int = 0
-    y: int = 0
-    z: float = 0.0
-
 class StageController:
     def __init__(self, port_num, sdk_path):
         self.port_num = port_num
@@ -119,7 +113,7 @@ class StageController:
 
         self.get_z_position()
 
-        return StagePosition(self.x, self.y, self.z)
+        return self.x, self.y, self.z
 
     def get_z_position(self):
         _, response = self.cmd("controller.z.position.get")

@@ -27,9 +27,6 @@ from UI.panels.exposure_panel import ExposurePanel
 from Imaging.frame_processing import FrameProcessor
 from Imaging.focus import FocusController
 
-home_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-parent_dir = home_dir.parent
-
 DLL_PATH = os.getcwd() + r"\APIs\PriorSDK1.9.2\x64\PriorScientificSDK.dll"
 PRIOR_COM_PORT = sys.argv[1]
 TURRET_COM_PORT = sys.argv[2]
@@ -58,7 +55,8 @@ class App:
         self.width = 0
         self.height = 0
         
-        self.magnification = "2x"
+        self.magnification = "2X"
+        self.resolution = "MED"
 
         self.buttons = []
         self.panels = []
@@ -69,80 +67,55 @@ class App:
         
         self.frame_processor = FrameProcessor(
             root=self.root,
+            app=self,
             stage=self.stage_controller,
-            home_dir=home_dir,
-            get_view_mode=lambda: self.view_mode,
-            get_filter_status=lambda: self.filter_var.get(),
-            get_magnification=lambda: self.magnification,
             #get_live_mapping_status=lambda: self.live_mapping_var.get(),
-            display_image=self.display_image,
-            display_map=self.display_map,
             #place_live_frame_on_map=self.place_live_frame_on_map,
-            disable_buttons=self.disable_buttons,
-            enable_buttons=self.enable_buttons,
         )
         self.frame_processor.run_camera()
 
         self.focus_controller = FocusController(
+            app=self,
             stage=self.stage_controller,
             frame_processor=self.frame_processor,
-            disable_buttons=self.disable_buttons,
-            enable_buttons=self.enable_buttons,
         )
 
         self.turret = turret(TURRET_COM_PORT)
         self.turret_controller = TurretController( 
+            app=self,
             stage=self.stage_controller,
             turret=self.turret,
             auto_focus=self.focus_controller.auto_focus,
-            enable_buttons=self.enable_buttons,
-            disable_buttons=self.disable_buttons,
-            set_magnification=self.set_magnification
         )
 
         self.scan_manager = ScanManager(
             root=self.root,
-            home_dir=home_dir,
+            app=self,
             stage=self.stage_controller,
             turret_controller=self.turret_controller,
             camera=self.frame_processor.get_camera(),
             frame_processor=self.frame_processor,
-            get_view_mode=lambda: self.view_mode,
-            get_filter_status=self.filter_var.get,
-            set_filter_status=self.filter_var.set,
-            set_view=self.set_view,
-            display_image=self.display_image,
-            display_map=self.display_map,
             update_scan_status=self.scan_info_panel.update_status,
-            open_panel=self.open_panel,
-            get_true_map=self.get_true_map,
-            set_true_map=self.set_true_map,
-            get_filter_map=self.get_filter_map,
-            set_filter_map=self.set_filter_map,
         )
 
         self.stage_controller_control_panel = StageControlPanel(
             parent=self.main_frame,
             root=self.root,
+            app=self,
             stage=self.stage_controller,
-            disable_buttons=self.disable_buttons,
-            enable_buttons=self.enable_buttons,
-            register_button=self.buttons.append
         )
 
         self.objective_control_panel = ObjectiveControlPanel(
             parent=self.main_frame,
+            app=self,
             stage_controller=self.stage_controller,
             turret_controller=self.turret_controller,
-            set_magnification=self.set_magnification,
-            register_button=self.buttons.append,
         )
 
         self.capture_panel = CapturePanel(
             parent=self.main_frame,
+            app=self,
             save_image=self.frame_processor.save_image,
-            get_true_map=self.get_true_map,
-            register_button=self.buttons.append,
         )
 
         self.exposure_panel = ExposurePanel(
@@ -152,16 +125,14 @@ class App:
 
         self.focus_panel = FocusPanel(
             parent=self.main_frame,
+            app=self,
             focus_controller=self.focus_controller,
-            register_button=self.buttons.append,
         )
         
         self.view_scans_panel = ViewScansPanel(
             parent=self.main_frame,
             root=self.root,
-            set_view=self.set_view,
-            get_view_mode=lambda: self.view_mode,
-            display_image=self.display_image,
+            app=self,
         )
 
         self.focus_controller.sharpness_callback = self.focus_panel.update_sharpness
@@ -273,29 +244,7 @@ class App:
         self.view_scans_panel.config(height=new_height)
         self.view_scans_background.config(height=new_height - 2)
 
-    def set_magnification(self, magnification):
-        self.magnification = magnification
-
     # ------------- Display Functions -------------
-
-    def set_view(self, mode, filter_status):
-        self.view_mode = mode
-
-        self.filter_var.set(filter_status)
-
-        if mode == "Map":
-            self.display_map()
-            self.map_canvas.pack(fill=BOTH, expand=True) # Show map canvas
-            self.img_label.pack_forget() # Hide image label
-            pass
-        elif mode == "Camera View":
-            self.img_label.pack(fill=BOTH, expand=True)
-            self.map_canvas.pack_forget() # Hide map canvas
-        elif mode == "Scan Results":
-            self.img_label.pack(fill=BOTH, expand=True)
-            self.map_canvas.pack_forget() # Hide map canvas
-
-        self.root.update()
 
     def display_map(self):
         if self.filter_var.get():
@@ -336,18 +285,18 @@ class App:
         cy = h // 2
 
         if self.view_mode == "Camera View":
-            if self.magnification == "2x":
-                crop_w = int(w * CROP_RATIO["2x"]["x"])
-                crop_h = int(h * CROP_RATIO["2x"]["y"])
-            elif self.magnification == "10x":
-                crop_w = int(w * CROP_RATIO["10x"]["x"])
-                crop_h = int(h * CROP_RATIO["10x"]["y"])
-            elif self.magnification == "20x":
-                crop_w = int(w * CROP_RATIO["20x"]["x"])
-                crop_h = int(h * CROP_RATIO["20x"]["y"])
-            elif self.magnification == "100x":
-                crop_w = int(w * CROP_RATIO["100x"]["x"])
-                crop_h = int(h * CROP_RATIO["100x"]["y"])
+            if self.magnification == "2X":
+                crop_w = int(w * CROP_RATIO["2X"]["x"])
+                crop_h = int(h * CROP_RATIO["2X"]["y"])
+            elif self.magnification == "10X":
+                crop_w = int(w * CROP_RATIO["10X"]["x"])
+                crop_h = int(h * CROP_RATIO["10X"]["y"])
+            elif self.magnification == "20X":
+                crop_w = int(w * CROP_RATIO["20X"]["x"])
+                crop_h = int(h * CROP_RATIO["20X"]["y"])
+            elif self.magnification == "100X":
+                crop_w = int(w * CROP_RATIO["100X"]["x"])
+                crop_h = int(h * CROP_RATIO["100X"]["y"])
             else:
                 crop_w = w
                 crop_h = h
@@ -430,6 +379,40 @@ class App:
         self.frame_processor.close()
         self.stage_controller.disconnect()
         self.root.destroy()
+
+    def get_view(self):
+        return self.view_mode
+
+    def set_view(self, mode, filter_status):
+        self.view_mode = mode
+
+        self.filter_var.set(filter_status)
+
+        if mode == "Map":
+            self.display_map()
+            self.map_canvas.pack(fill=BOTH, expand=True) # Show map canvas
+            self.img_label.pack_forget() # Hide image label
+            pass
+        elif mode == "Camera View":
+            self.img_label.pack(fill=BOTH, expand=True)
+            self.map_canvas.pack_forget() # Hide map canvas
+        elif mode == "Scan Results":
+            self.img_label.pack(fill=BOTH, expand=True)
+            self.map_canvas.pack_forget() # Hide map canvas
+
+        self.root.update()
+
+    def get_magnification(self):
+        return self.magnification
+
+    def set_magnification(self, magnification):
+        self.magnification = magnification
+
+    def get_resolution(self):
+        return self.resolution
+    
+    def set_resolution(self, resolution):
+        self.resolution = resolution
 
     def get_true_map(self):
         return self.true_map

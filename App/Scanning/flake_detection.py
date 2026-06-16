@@ -1,5 +1,5 @@
 import cv2
-import Scanning.flake_identifier as flake_identifier
+from Scanning.flake_identifier import Flake_Identifier
 
 def flake_detection_10x(image_queue, frame_processor):
     while True:
@@ -10,6 +10,8 @@ def flake_detection_10x(image_queue, frame_processor):
 
         img = cv2.imread(str(img_path))
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        flake_identifier = Flake_Identifier()
 
         scanned_img, _, save = flake_identifier.identify_flakes_flake_model(img)
 
