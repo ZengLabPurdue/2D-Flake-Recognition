@@ -7,12 +7,12 @@ class TurretController:
         self, 
         app,
         stage,
-        turret,
+        turret_port,
         auto_focus,
     ):
         self.app = app
         self.stage = stage
-        self.turret = turret
+        self.turret = turret(turret_port)
         self.auto_focus = auto_focus
 
     def get_position(self):

@@ -118,15 +118,15 @@ class FrameProcessor:
                     #self.place_live_frame_on_map(cropped, zoom=3)
             '''
 
-            if self.app.view_mode == "Camera View":
-                if self.app.filter_var.get():
+            if self.app.get_view() == "Camera View":
+                if self.app.get_filter():
                     display = cv2.cvtColor(chip_edge_classifier.chip_filter(img), cv2.COLOR_GRAY2RGB)
                 else:
                     display = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
                 self.app.display_image(display)
 
-            elif self.app.view_mode == "Map":
+            elif self.app.get_view() == "Map":
                 self.app.display_map()
 
         except Exception as ex:
@@ -341,16 +341,16 @@ class FrameProcessor:
     def crop_frame(self, frame):
         h, w = frame.shape[:2]
 
-        if self.app.magnification == "2X":
+        if self.app.get_magnification() == "2X":
             crop_w = int(w * CROP_RATIO["2X"]["x"])
             crop_h = int(h * CROP_RATIO["2X"]["y"])
-        elif self.app.magnification == "10X":
+        elif self.app.get_magnification() == "10X":
             crop_w = int(w * CROP_RATIO["10X"]["x"])
             crop_h = int(h * CROP_RATIO["10X"]["y"])
-        elif self.app.magnification == "20X":
+        elif self.app.get_magnification() == "20X":
             crop_w = int(w * CROP_RATIO["20X"]["x"])
             crop_h = int(h * CROP_RATIO["20X"]["y"])
-        elif self.app.magnification == "100X":
+        elif self.app.get_magnification() == "100X":
             crop_w = int(w * CROP_RATIO["100X"]["x"])
             crop_h = int(h * CROP_RATIO["100X"]["y"])
         else:

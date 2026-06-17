@@ -51,7 +51,7 @@ class CapturePanel:
             command=self.save_image
         )
         self.capture_image_button.place(relx=0.5, y=55, anchor="center")
-        self.app.buttons.append(self.capture_image_button)
+        self.app.register_button(self.capture_image_button)
 
         self.capture_map_button = ttk.Button(
             background,
@@ -60,7 +60,7 @@ class CapturePanel:
             command=self.save_map
         )
         self.capture_map_button.place(relx=0.5, y=90, anchor="center")
-        self.app.buttons.append(self.capture_map_button)
+        self.app.register_button(self.capture_map_button)
 
         return frame
 

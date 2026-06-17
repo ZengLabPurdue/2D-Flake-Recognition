@@ -134,7 +134,7 @@ class StageControlPanel:
             command=self.set_origin
         )
         self.reset_button.place(relx=0.5, y=170, anchor="n")
-        self.app.buttons.append(self.reset_button)
+        self.app.register_button(self.reset_button)
 
         self.move_to_button = ttk.Button(
             panel,
@@ -143,7 +143,7 @@ class StageControlPanel:
             command=self.go_to_position
         )
         self.move_to_button.place(relx=0.5, y=205, anchor="n")
-        self.app.buttons.append(self.move_to_button)
+        self.app.register_button(self.move_to_button)
 
         # Arrow buttons
         button_panel = tk.Frame(panel, bg="white", width=120, height=90)
@@ -159,7 +159,7 @@ class StageControlPanel:
         self.btn_right = ttk.Button(controls, text="▸", style="Arrow.TButton")
 
         for btn in [self.btn_forward, self.btn_backward, self.btn_left, self.btn_right]:
-            self.app.buttons.append(btn)
+            self.app.register_button(btn)
 
         self.btn_forward.bind("<ButtonPress-1>", self.on_press_forward)
         self.btn_forward.bind("<ButtonRelease-1>", self.on_release_forward)
@@ -232,7 +232,7 @@ class StageControlPanel:
             command=self.set_z_zero
         )
         self.z_reset_button.place(relx=0.5, y=440, anchor="n")
-        self.app.buttons.append(self.z_reset_button)
+        self.app.register_button(self.z_reset_button)
 
         self.z_move_to_button = ttk.Button(
             panel,
@@ -241,7 +241,7 @@ class StageControlPanel:
             command=self.go_to_z_position
         )
         self.z_move_to_button.place(relx=0.5, y=475, anchor="n")
-        self.app.buttons.append(self.z_move_to_button)
+        self.app.register_button(self.z_move_to_button)
 
         z_button_panel = tk.Frame(panel, bg="white", width=80, height=45)
         z_button_panel.place(relx=0.5, y=510, anchor="n")
@@ -259,8 +259,8 @@ class StageControlPanel:
         self.btn_down.bind("<ButtonPress-1>", self.on_press_down)
         self.btn_down.bind("<ButtonRelease-1>", self.on_release_down)
 
-        self.app.buttons.append(self.btn_up)
-        self.app.buttons.append(self.btn_down)
+        self.app.register_button(self.btn_up)
+        self.app.register_button(self.btn_down)
 
         z_controls.rowconfigure(0, weight=1)
         z_controls.columnconfigure(0, weight=1)

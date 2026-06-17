@@ -310,7 +310,7 @@ class ViewScansPanel:
         self.root.update()
 
     def previous_image(self, event=None):
-        if self.app.view_mode != "Scan Results":
+        if self.app.get_view() != "Scan Results":
             return
 
         if not self.image_files:
@@ -321,7 +321,7 @@ class ViewScansPanel:
         self.root.focus_set()
 
     def next_image(self, event=None):
-        if self.app.view_mode != "Scan Results":
+        if self.app.get_view() != "Scan Results":
             return
 
         if not self.image_files:

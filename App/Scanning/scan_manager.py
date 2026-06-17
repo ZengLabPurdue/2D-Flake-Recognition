@@ -138,8 +138,8 @@ class ScanManager:
             binary = wafer_detection.wafer_filter(img, display=False)
             img_binary_rgb = cv2.cvtColor(binary, cv2.COLOR_GRAY2RGB)
 
-            if self.app.view_mode == "Camera View":
-                if self.app.filter_var.get():
+            if self.app.get_view() == "Camera View":
+                if self.app.get_filter():
                     self.app.display_image(img_binary_rgb)
                 else:
                     self.app.display_image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
@@ -262,9 +262,9 @@ class ScanManager:
                 if image_queue is not None:
                     image_queue.put(image_path)
 
-                if self.app.view_mode == "Camera View":
-                    if self.app.filter_var.get():
-                        self.app.filter_var.set(False)
+                if self.app.get_view() == "Camera View":
+                    if self.app.get_filter():
+                        self.app.set_filter(False)
 
                     self.root.after(0, lambda img=img: self.app.display_image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)))
 

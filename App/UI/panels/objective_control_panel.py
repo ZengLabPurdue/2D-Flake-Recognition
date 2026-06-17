@@ -93,7 +93,7 @@ class ObjectiveControlPanel:
         ]
 
         for btn in self.objective_buttons:
-            self.app.buttons.append(btn)
+            self.app.register_button(btn)
 
         for r in range(3):
             controls.rowconfigure(r, weight=1)

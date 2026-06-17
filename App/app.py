@@ -61,8 +61,6 @@ class App:
         self.buttons = []
         self.panels = []
 
-        self.scan_info_panel = ScanInfoPanel(parent=self.main_frame)
-
         self.stage_controller = StageController(PRIOR_COM_PORT, DLL_PATH)
         
         self.frame_processor = FrameProcessor(
@@ -80,13 +78,14 @@ class App:
             frame_processor=self.frame_processor,
         )
 
-        self.turret = turret(TURRET_COM_PORT)
         self.turret_controller = TurretController( 
             app=self,
             stage=self.stage_controller,
-            turret=self.turret,
+            turret_port=TURRET_COM_PORT,
             auto_focus=self.focus_controller.auto_focus,
         )
+
+        self.scan_info_panel = ScanInfoPanel(parent=self.main_frame)
 
         self.scan_manager = ScanManager(
             root=self.root,
@@ -184,7 +183,7 @@ class App:
     # ------------- Initialization -------------
 
     def init_menu_bar(self):
-        menu_bar = Menu(root)
+        menu_bar = Menu(self.root)
         file_menu = Menu(menu_bar, tearoff=0)
         file_menu.add_command(label="Quit", command=self.on_close)
         menu_bar.add_cascade(label="File", menu=file_menu)
@@ -224,7 +223,7 @@ class App:
 
         self.view_scans_panel.add_to_menu(menu_bar)
 
-        root.config(menu=menu_bar)
+        self.root.config(menu=menu_bar)
 
     def display_chip_dropdown(self, display=True):
 
@@ -367,6 +366,9 @@ class App:
             btn.state(["disabled"])
         self.root.update_idletasks()
 
+    def register_button(self, button):
+        self.buttons.append(button)
+
     def clear_focus(self, event):
         widget = event.widget
 
@@ -400,7 +402,13 @@ class App:
             self.img_label.pack(fill=BOTH, expand=True)
             self.map_canvas.pack_forget() # Hide map canvas
 
-        self.root.update()
+        self.root.update_idletasks()
+
+    def get_filter(self):
+        return self.filter_var.get()
+    
+    def set_filter(self, status : bool):
+        self.filter_var.set(status)
 
     def get_magnification(self):
         return self.magnification

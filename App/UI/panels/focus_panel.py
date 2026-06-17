@@ -124,7 +124,7 @@ class FocusPanel:
         )
         self.auto_focus_btn.place(relx=0.5, y=160, anchor="n")
 
-        self.app.buttons.append(self.auto_focus_btn)
+        self.app.register_button(self.auto_focus_btn)
 
         return panel
 
