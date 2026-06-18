@@ -350,7 +350,7 @@ class Mapper:
 
     def capture_area(self, window=(7, 7), zoom=4):
 
-        self.open_panel("Info Panel")
+        self.open_panel("Status Panel")
 
         #self.turret_controller.change_objective(1)
 

@@ -5,6 +5,16 @@ import json
 import cv2
 import numpy as np
 
+import os
+import sys
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+
+sys.path.insert(0, project_root)
+
+from Scanning.contour_extractor import get_contour
+
 IMAGE_SAVE_DIR = Path(r"C:\Users\Zengl\Box\Zenglab_fabrication\DATABASE\Images")
 JSON_SAVE_DIR = Path(r"C:\Users\Zengl\Box\Zenglab_fabrication\DATABASE\to_read")
 
@@ -57,19 +67,16 @@ if __name__ == "__main__":
     path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
     img2 = cv2.imread(path, cv2.IMREAD_COLOR)
 
+    points = get_contour(img2)
+
     save_flake(
-        flake_id="Gr_00000_A",
+        flake_id="Test_00001_C",
         image_20X=img1,
         image_100X=img2,
         metadata={
             "substrate": "285nm",
             "material" : "Graphene",
             "classification": "thin",
-            "outline": [
-                [100, 0],
-                [100, 100],
-                [0, 100],
-                [0, 0],
-            ]
+            "contour": points
         }
     )

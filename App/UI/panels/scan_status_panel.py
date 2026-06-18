@@ -1,6 +1,6 @@
 from tkinter import Frame, Label
 
-class ScanInfoPanel:
+class ScanStatusPanel:
     def __init__(self, parent):
         self.parent = parent
         self.frame = self._build_panel()
@@ -24,7 +24,7 @@ class ScanInfoPanel:
 
         title_label = Label(
             panel,
-            text="Info",
+            text="Status",
             bg="white",
             fg="black",
             font=("TkDefaultFont", 13)

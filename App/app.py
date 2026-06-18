@@ -15,10 +15,11 @@ from Mapping.mapper import Mapper
 from Scanning.scan_manager import ScanManager
 from Hardware.stage_controller import StageController
 from Hardware.turret_controller import TurretController
+from UI.panels.info_panel import InfoPanel
 from UI.panels.stage_control_panel import StageControlPanel
 from UI.panels.objective_control_panel import ObjectiveControlPanel
 from UI.panels.focus_panel import FocusPanel
-from UI.panels.scan_info_panel import ScanInfoPanel
+from UI.panels.scan_status_panel import ScanStatusPanel
 from UI.panels.view_scans_panel import ViewScansPanel
 from UI.panels.capture_panel import CapturePanel
 from UI.panels.exposure_panel import ExposurePanel
@@ -55,7 +56,7 @@ class App:
         self.height = 0
         
         self.magnification = "2X"
-        self.resolution = "MED"
+        self.resolution = "HIGH"
 
         self.buttons = []
         self.panels = []
@@ -82,7 +83,9 @@ class App:
             auto_focus=self.focus_controller.auto_focus,
         )
 
-        self.scan_info_panel = ScanInfoPanel(parent=self.main_frame)
+        self.info_panel = InfoPanel(parent=self.main_frame)
+
+        self.scan_status_panel = ScanStatusPanel(parent=self.main_frame)
 
         self.mapper = Mapper(
             root=self.root,
@@ -90,7 +93,7 @@ class App:
             stage=self.stage_controller,
             turret_controller=self.turret_controller,
             frame_processor=self.frame_processor,
-            update_scan_status=self.scan_info_panel.update_status,
+            update_scan_status=self.scan_status_panel.update_status,
         )
         self.frame_processor.place_live_frame_on_map = self.mapper.place_live_frame_on_map
 
@@ -101,7 +104,7 @@ class App:
             turret_controller=self.turret_controller,
             camera=self.frame_processor.get_camera(),
             frame_processor=self.frame_processor,
-            update_scan_status=self.scan_info_panel.update_status,
+            update_scan_status=self.scan_status_panel.update_status,
         )
 
         self.stage_controller_control_panel = StageControlPanel(
@@ -145,7 +148,13 @@ class App:
 
         self.panels.append({
             "name": "Info Panel",
-            "frame": self.scan_info_panel.frame,
+            "frame": self.info_panel.frame,
+            "var": BooleanVar(value=False)
+        })
+
+        self.panels.append({
+            "name": "Status Panel",
+            "frame": self.scan_status_panel.frame,
             "var": BooleanVar(value=False)
         })
 

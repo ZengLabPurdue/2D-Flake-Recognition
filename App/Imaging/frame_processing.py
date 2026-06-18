@@ -33,13 +33,18 @@ class FrameProcessor:
         self.height = 0
 
         self.frame_id = 0
-        self.frame_buffer = deque(maxlen=10)
+        self.frame_buffer = deque(maxlen=5)
 
         self.last_used_capture_frame_id = -1
         self.last_processed_frame_id = -1
 
         self.was_busy = False
         self.capture_after_move = False
+
+        self.camera_last_time = time.perf_counter()
+        self.camera_fps = 0.0
+        self.display_last_time = time.perf_counter()
+        self.display_fps = 0.0
 
     @staticmethod
     def cameraCallback(nEvent, ctx):
@@ -71,6 +76,15 @@ class FrameProcessor:
 
             self.frame_buffer.append(frame_data)
             self.frame_id += 1
+
+            new_time = time.perf_counter()
+            dt = new_time - self.camera_last_time
+            
+            if dt > 0:
+                self.camera_fps = 1.0 / dt
+                self.camera_ms_per_frame = 1000.0 * dt
+            
+            self.camera_last_time = new_time
 
         except amcam.HRESULTException as ex:
             print("Camera error:", ex)
@@ -112,6 +126,7 @@ class FrameProcessor:
                     cropped = self.crop_frame(img)
                     self.place_live_frame_on_map(cropped, zoom=3)
 
+            '''
             if self.app.get_view() == "Camera View":
                 if self.app.get_filter():
                     display = cv2.cvtColor(chip_edge_classifier.chip_filter(img), cv2.COLOR_GRAY2RGB)
@@ -122,9 +137,21 @@ class FrameProcessor:
 
             elif self.app.get_view() == "Map":
                 self.app.display_map()
+            '''
 
         except Exception as ex:
             print("Frame processing error:", ex)
+
+        new_time = time.perf_counter()
+        dt = new_time - self.display_last_time
+        
+        if dt > 0:
+            self.display_fps = 1.0 / dt
+            self.display_ms_per_frame = 1000.0 * dt
+        
+        self.display_last_time = new_time
+
+        self.app.info_panel.update_fps(self.camera_fps, self.display_fps)
 
         self.root.after(PROCESS_FRAME_RATE, self.process_frame)
 

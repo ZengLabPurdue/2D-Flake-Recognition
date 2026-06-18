@@ -39,7 +39,7 @@ def pick_point(image_bgr):
 def get_region_from_point(
     image_bgr,
     seed_point,
-    threshold=20,
+    threshold=15,
     connectivity=8,
     min_area=5,
 ):
@@ -91,6 +91,18 @@ def get_region_from_point(
 
     return contour_points, region_pixels, region_mask, contour
 
+def get_contour(image_bgr):
+    seed_point = pick_point(image_bgr)
+
+    contour_points, _, _, _ = get_region_from_point(
+        image_bgr=image_bgr,
+        seed_point=seed_point,
+        threshold=10,
+        connectivity=8,
+    )
+
+    return contour_points
+
 if __name__ == "__main__":
 
     path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
@@ -104,7 +116,7 @@ if __name__ == "__main__":
     contour_points, region_pixels, region_mask, contour = get_region_from_point(
         image_bgr=image_bgr,
         seed_point=seed_point,
-        threshold=5,
+        threshold=10,
         connectivity=8,
     )
 
@@ -129,10 +141,10 @@ if __name__ == "__main__":
         overlay = cv2.addWeighted(image_bgr, 0.7, colored_region, 0.3, 0)
 
         # Draw contour in red
-        cv2.drawContours(overlay, [contour], -1, (0, 0, 255), 2)
+        cv2.drawContours(overlay, [contour], -1, (255, 255, 255), 2)
 
         # Draw selected seed point in blue
-        cv2.circle(overlay, seed_point, 5, (255, 0, 0), -1)
+        cv2.circle(overlay, seed_point, 5, (0, 0, 255), -1)
 
     cv2.namedWindow("Selected Region", cv2.WINDOW_NORMAL)
     cv2.imshow("Selected Region", overlay)

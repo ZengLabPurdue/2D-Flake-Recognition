@@ -40,7 +40,7 @@ class ScanManager:
 
         self.app.set_live_mapping(False)
 
-        self.app.open_panel("Info Panel")
+        self.app.open_panel("Status Panel")
 
         start_time = time.time()
 
@@ -94,7 +94,7 @@ class ScanManager:
     ):
         self.app.set_live_mapping(False)
 
-        self.app.open_panel("Info Panel")
+        self.app.open_panel("Status Panel")
 
         print("2x scan running...")
 
@@ -203,7 +203,7 @@ class ScanManager:
     ):
         self.app.set_live_mapping(False)
 
-        self.app.open_panel("Info Panel")
+        self.app.open_panel("Status Panel")
 
         start_time = time.time()
 
