@@ -7,12 +7,10 @@ import time
 import cv2
 import numpy as np
 
-from config import HOME_DIR, CROP_RATIO
+from config import HOME_DIR, CROP_RATIO, RESOLUTION, PROCESS_FRAME_RATE
 
 from . import amcam
 from . import chip_edge_classifier
-
-PROCESS_FRAME_RATE = 30
 
 class FrameProcessor:
     def __init__(
@@ -20,21 +18,20 @@ class FrameProcessor:
         root, 
         app,
         stage, 
-        #get_live_mapping_status, 
-        #place_live_frame_on_map,
+        get_live_mapping, 
+        place_live_frame_on_map,
     ):
         self.root = root
         self.app = app
         self.stage = stage
 
-        #self.get_live_mapping_status = get_live_mapping_status
-        #self.place_live_frame_on_map = place_live_frame_on_map #TODO: Re-add mapping
+        self.get_live_mapping = get_live_mapping
+        self.place_live_frame_on_map = place_live_frame_on_map
 
         self.hcam = None
         self.buf = None
         self.width = 0
         self.height = 0
-        self.resolution = None
 
         self.frame_id = 0
         self.frame_buffer = deque(maxlen=10)
@@ -99,8 +96,7 @@ class FrameProcessor:
 
             self.last_processed_frame_id = data["frame_id"]
 
-            '''
-            if self.get_live_mapping_status():
+            if self.get_live_mapping():
                 busy = self.stage.is_busy()
 
                 if self.was_busy and not busy:
@@ -115,8 +111,7 @@ class FrameProcessor:
                 if self.capture_after_move:
                     self.capture_after_move = False
                     cropped = self.crop_frame(img)
-                    #self.place_live_frame_on_map(cropped, zoom=3)
-            '''
+                    self.place_live_frame_on_map(cropped, zoom=3)
 
             if self.app.get_view() == "Camera View":
                 if self.app.get_filter():
@@ -145,8 +140,7 @@ class FrameProcessor:
 
         self.reset_camera_settings(self.hcam)
 
-        self.hcam.put_eSize(1)
-        self.resolution = self.hcam.get_eSize()
+        self.hcam.put_eSize(RESOLUTION[self.app.get_resolution()])
 
         self.width, self.height = self.hcam.get_Size()
 
@@ -205,8 +199,8 @@ class FrameProcessor:
         cam.put_Gamma(100)
         cam.put_Saturation(128)
 
-    def change_resolution(self, index):
-        self.resolution = index
+    def change_resolution(self, resolution):
+        self.app.set_resolution(resolution)
 
         self.app.disable_buttons()
 
@@ -219,7 +213,7 @@ class FrameProcessor:
 
             self.reset_camera_settings(self.hcam)
 
-            self.hcam.put_eSize(index)
+            self.hcam.put_eSize(self.hcam.put_eSize(RESOLUTION[self.app.get_resolution()]))
 
             self.width, self.height = self.hcam.get_Size()
 

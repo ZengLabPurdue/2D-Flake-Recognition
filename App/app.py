@@ -9,13 +9,11 @@ import tkinter as tk
 from tkinter import ttk
 from PIL import Image, ImageTk
 
-from pathlib import Path
-
 from config import CROP_RATIO
 
+from Mapping.mapper import Mapper
 from Scanning.scan_manager import ScanManager
 from Hardware.stage_controller import StageController
-from Hardware.turret_api import turret
 from Hardware.turret_controller import TurretController
 from UI.panels.stage_control_panel import StageControlPanel
 from UI.panels.objective_control_panel import ObjectiveControlPanel
@@ -47,6 +45,7 @@ class App:
         self.img_label = Label(self.main_frame, bg="#f0f0f0")
         self.img_label.pack(fill=BOTH, expand=True)
 
+        self.live_mapping_var = tk.BooleanVar(value=False)
         self.filter_var = tk.BooleanVar(value=False)
         self.view_mode = None
         self.set_view("Camera View", False)
@@ -67,10 +66,9 @@ class App:
             root=self.root,
             app=self,
             stage=self.stage_controller,
-            #get_live_mapping_status=lambda: self.live_mapping_var.get(),
-            #place_live_frame_on_map=self.place_live_frame_on_map,
+            get_live_mapping_status=self.get_live_mapping,
+            place_live_frame_on_map=self.mapper.place_live_frame_on_map,
         )
-        self.frame_processor.run_camera()
 
         self.focus_controller = FocusController(
             app=self,
@@ -86,6 +84,15 @@ class App:
         )
 
         self.scan_info_panel = ScanInfoPanel(parent=self.main_frame)
+
+        self.mapper = Mapper(
+            root=self.root,
+            app=self,
+            stage=self.stage_controller,
+            turret_controller=self.turret_controller,
+            frame_processor=self.frame_processor,
+            update_scan_status=self.scan_info_panel.update_status,
+        )
 
         self.scan_manager = ScanManager(
             root=self.root,
@@ -180,6 +187,8 @@ class App:
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
+        self.frame_processor.run_camera()        
+
     # ------------- Initialization -------------
 
     def init_menu_bar(self):
@@ -213,6 +222,12 @@ class App:
             )
 
         menu_bar.add_cascade(label="Panels", menu=panel_menu)
+
+        map_menu = Menu(menu_bar, tearoff=0)
+        map_menu.add_radiobutton(label="Live Map 2x", variable=self.live_mapping_var, value=True, command=lambda: self.mapper.set_live_map_2x())
+        map_menu.add_command(label="Auto Map 2x", command=self.mapper.auto_map_2x)
+        map_menu.add_command(label="Capture Area", command=self.mapper.capture_area)
+        menu_bar.add_cascade(label="Map", menu=map_menu)
 
         scan_menu = Menu(menu_bar, tearoff=0)
         scan_menu.add_command(label="Run Complete Scan (1 Chip)", command=self.scan_manager.run_complete_scan)
@@ -403,6 +418,12 @@ class App:
             self.map_canvas.pack_forget() # Hide map canvas
 
         self.root.update_idletasks()
+
+    def get_live_mapping(self):
+        return self.live_mapping_var.get()
+    
+    def set_live_mapping(self, live_mapping_status):
+        self.live_mapping_var.set(live_mapping_status)
 
     def get_filter(self):
         return self.filter_var.get()

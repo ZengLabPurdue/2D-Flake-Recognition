@@ -75,4 +75,4 @@ if __name__ == "__main__":
             
     image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
     image_bgr = cv2.imread(image_path, cv2.IMREAD_COLOR)
-    find_flakes(image_bgr, display=True)
+    find_flakes(image_bgr, edge_threshold=5, display=True)

@@ -35,6 +35,11 @@ class ScanManager:
         self.resolution = self.app.get_resolution()
 
     def run_complete_scan(self, window=(3, 3)):
+
+        self.app.set_live_mapping(False)
+
+        self.app.set_live_mapping(False)
+
         self.app.open_panel("Info Panel")
 
         start_time = time.time()
@@ -87,6 +92,8 @@ class ScanManager:
         full_scan_start_time=None,
         full_zoom=False,
     ):
+        self.app.set_live_mapping(False)
+
         self.app.open_panel("Info Panel")
 
         print("2x scan running...")
@@ -194,6 +201,8 @@ class ScanManager:
         full_scan=False,
         full_scan_start_time=None,
     ):
+        self.app.set_live_mapping(False)
+
         self.app.open_panel("Info Panel")
 
         start_time = time.time()
