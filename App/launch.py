@@ -4,11 +4,9 @@ import sys
 from pathlib import Path
 from tkinter import Tk, StringVar
 from tkinter import ttk
-from tkinter import filedialog
 
 home_dir = os.path.dirname(os.path.abspath(__file__))
 scanner_path = Path(home_dir) / "app.py"
-mapper_path = Path(home_dir) / "mapper.py"
 os.chdir(home_dir)
 
 # Hello roommate
@@ -25,7 +23,6 @@ def on_close():
 
     python_exe = Path(sys.executable)
     script = scanner_path
-    #script = mapper_path
 
     cmd = [str(python_exe), str(script), str(prior_args_final), str(olympius_args_final)]
     subprocess.run(cmd, check=True)

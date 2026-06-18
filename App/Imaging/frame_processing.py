@@ -19,14 +19,13 @@ class FrameProcessor:
         app,
         stage, 
         get_live_mapping, 
-        place_live_frame_on_map,
     ):
         self.root = root
         self.app = app
         self.stage = stage
 
         self.get_live_mapping = get_live_mapping
-        self.place_live_frame_on_map = place_live_frame_on_map
+        self.place_live_frame_on_map = None
 
         self.hcam = None
         self.buf = None

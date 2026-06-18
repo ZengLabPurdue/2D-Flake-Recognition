@@ -66,8 +66,7 @@ class App:
             root=self.root,
             app=self,
             stage=self.stage_controller,
-            get_live_mapping_status=self.get_live_mapping,
-            place_live_frame_on_map=self.mapper.place_live_frame_on_map,
+            get_live_mapping=self.get_live_mapping,
         )
 
         self.focus_controller = FocusController(
@@ -93,6 +92,7 @@ class App:
             frame_processor=self.frame_processor,
             update_scan_status=self.scan_info_panel.update_status,
         )
+        self.frame_processor.place_live_frame_on_map = self.mapper.place_live_frame_on_map
 
         self.scan_manager = ScanManager(
             root=self.root,

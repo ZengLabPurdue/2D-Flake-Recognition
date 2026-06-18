@@ -24,7 +24,7 @@ class Mapper:
         self.turret_controller = turret_controller
         self.frame_processor = frame_processor
         self.update_scan_status = update_scan_status
-        
+
     def initialize_2x_mapping(self):
 
         self.app.set_live_mapping(False)
@@ -66,11 +66,11 @@ class Mapper:
 
         h, w = img_rgb.shape[:2]
 
-        cur_X, cur_Y, _ = self.stage.get_curr_pos()
+        cur_X, cur_Y, _ = self.stage.get_position()
         dx_um = cur_X - self.stage_center_x
         dy_um = cur_Y - self.stage_center_y
 
-        map_pixels_per_um = 1 / PIXEL_SIZE[self.app.get_resolution] / zoom
+        map_pixels_per_um = 1 / PIXEL_SIZE[self.app.get_magnification()][self.app.get_resolution()] / zoom
 
         dx_px = -int(dx_um * map_pixels_per_um)
         dy_px = -int(dy_um * map_pixels_per_um)
