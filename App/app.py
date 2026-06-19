@@ -13,7 +13,7 @@ from config import CROP_RATIO
 
 from Mapping.mapper import Mapper
 from Scanning.scan_manager import ScanManager
-from Hardware.stage_controller import StageController
+from App.Hardware.stage_api import stage
 from Hardware.turret_controller import TurretController
 from UI.panels.info_panel import InfoPanel
 from UI.panels.stage_control_panel import StageControlPanel
@@ -61,26 +61,26 @@ class App:
         self.buttons = []
         self.panels = []
 
-        self.stage_controller = StageController(PRIOR_COM_PORT, DLL_PATH)
+        self.stage = stage(PRIOR_COM_PORT, DLL_PATH)
         
         self.frame_processor = FrameProcessor(
             root=self.root,
             app=self,
-            stage=self.stage_controller,
+            stage=self.stage,
             get_live_mapping=self.get_live_mapping,
         )
 
         self.focus_controller = FocusController(
             app=self,
-            stage=self.stage_controller,
+            stage=self.stage,
             frame_processor=self.frame_processor,
         )
 
         self.turret_controller = TurretController( 
             app=self,
-            stage=self.stage_controller,
+            stage=self.stage,
             turret_port=TURRET_COM_PORT,
-            auto_focus=self.focus_controller.auto_focus,
+            auto_focus=self.focus_controller.start_auto_focus_thread,
         )
 
         self.info_panel = InfoPanel(parent=self.main_frame)
@@ -90,7 +90,7 @@ class App:
         self.mapper = Mapper(
             root=self.root,
             app=self,
-            stage=self.stage_controller,
+            stage=self.stage,
             turret_controller=self.turret_controller,
             frame_processor=self.frame_processor,
             update_scan_status=self.scan_status_panel.update_status,
@@ -100,24 +100,24 @@ class App:
         self.scan_manager = ScanManager(
             root=self.root,
             app=self,
-            stage=self.stage_controller,
+            stage=self.stage,
             turret_controller=self.turret_controller,
             camera=self.frame_processor.get_camera(),
             frame_processor=self.frame_processor,
             update_scan_status=self.scan_status_panel.update_status,
         )
 
-        self.stage_controller_control_panel = StageControlPanel(
+        self.stage_control_panel = StageControlPanel(
             parent=self.main_frame,
             root=self.root,
             app=self,
-            stage=self.stage_controller,
+            stage=self.stage,
         )
 
         self.objective_control_panel = ObjectiveControlPanel(
             parent=self.main_frame,
             app=self,
-            stage_controller=self.stage_controller,
+            stage=self.stage,
             turret_controller=self.turret_controller,
         )
 
@@ -160,7 +160,7 @@ class App:
 
         self.panels.append({
             "name": "Stage Control Panel",
-            "frame": self.stage_controller_control_panel.frame,
+            "frame": self.stage_control_panel.frame,
             "var": BooleanVar(value=False)
         })
         
@@ -403,7 +403,7 @@ class App:
 
     def on_close(self):
         self.frame_processor.close()
-        self.stage_controller.disconnect()
+        self.stage.disconnect()
         self.root.destroy()
 
     def get_view(self):

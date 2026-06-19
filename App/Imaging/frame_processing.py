@@ -63,13 +63,14 @@ class FrameProcessor:
 
             img = cv2.flip(img, -1)
 
-            pos = self.stage.get_position()
+            x, y, z = self.stage.get_position()
 
             frame_data = {
                 "frame": img,
                 "timestamp": time.time(),
-                "x": pos.x if hasattr(pos, "x") else pos[0],
-                "y": pos.y if hasattr(pos, "y") else pos[1],
+                "x": x,
+                "y": y,
+                "z": z,
                 "frame_id": self.frame_id,
                 "stage_busy": self.stage.is_busy(),
             }
@@ -109,6 +110,9 @@ class FrameProcessor:
 
             self.last_processed_frame_id = data["frame_id"]
 
+            sharpness, _ = self.app.focus_controller.find_sharpness(img)
+            self.app.focus_panel.update_sharpness(sharpness)
+
             if self.get_live_mapping():
                 busy = self.stage.is_busy()
 
@@ -126,7 +130,6 @@ class FrameProcessor:
                     cropped = self.crop_frame(img)
                     self.place_live_frame_on_map(cropped, zoom=3)
 
-            '''
             if self.app.get_view() == "Camera View":
                 if self.app.get_filter():
                     display = cv2.cvtColor(chip_edge_classifier.chip_filter(img), cv2.COLOR_GRAY2RGB)
@@ -137,7 +140,6 @@ class FrameProcessor:
 
             elif self.app.get_view() == "Map":
                 self.app.display_map()
-            '''
 
         except Exception as ex:
             print("Frame processing error:", ex)

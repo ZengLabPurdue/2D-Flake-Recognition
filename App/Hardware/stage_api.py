@@ -2,7 +2,7 @@ from ctypes import WinDLL, create_string_buffer
 import os
 import time
 
-class StageController:
+class stage:
     def __init__(self, port_num, sdk_path):
         self.port_num = port_num
         self.sdk_path = sdk_path
@@ -106,8 +106,9 @@ class StageController:
             self.x = int(float(parts[0]))
             self.y = int(float(parts[1]))
         except Exception:
-            print(f"Could not parse XY position: {response!r}")
-            self.stop_all()
+            #print(f"Could not parse XY position: {response!r}")
+            #self.stop_all()
+            pass
 
         self.get_z_position()
 

@@ -1,4 +1,7 @@
+import threading
 import time
+
+import numpy as np
 import cv2
 
 class FocusController:
@@ -15,117 +18,207 @@ class FocusController:
 
         self.sharpness_callback = sharpness_callback or (lambda sharpness: None)
 
-    def find_sharpness(self, image):
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (3, 3), 0)
+        self.focus_thread = None
+        self.stop_focus_event = threading.Event()
+        self.focus_running = False
 
-        sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
+    def start_auto_focus_thread(self, focus_range, velocity, acceleration, peak_threshold):
+        if self.focus_thread is not None and self.focus_thread.is_alive():
+            print("Autofocus already running")
+            return
+
+        self.stop_focus_event.clear()
+        self.focus_running = True
+
+        self.app.root.after(0, self.app.disable_buttons)
+
+        self.focus_thread = threading.Thread(
+            target=self._auto_focus_worker,
+            args=(focus_range, velocity, acceleration, peak_threshold,),
+            daemon=True,
+        )
+
+        self.focus_thread.start()
+
+    def _auto_focus_worker(self, focus_range, velocity, acceleration, peak_threshold):
+        try:
+            self.auto_focus(focus_range=focus_range, z_velo=velocity, z_accel=acceleration, peak_found_threshold=peak_threshold)
+
+        except Exception as e:
+            import traceback
+            print("Autofocus error:", e)
+            traceback.print_exc()
+
+        finally:
+            self.focus_running = False
+            self.app.root.after(0, self.app.enable_buttons)
+
+    def stop_auto_focus(self):
+        self.stop_focus_event.set()
+
+    def get_latest_frame(self):
+        if len(self.frame_processor.frame_buffer) == 0:
+            return None, None
+
+        data = self.frame_processor.frame_buffer[-1]
+
+        frame = data["frame"]
+        frame_id = data["frame_id"]
+        z = data["z"]
+
+        return frame, frame_id, z
+
+    def find_sharpness(self, image):
+        start_time = time.perf_counter()
+
+        if image is None:
+            return 0
+
+        h, w = image.shape[:2]
+
+        roi_w = int(w * 0.4)
+        roi_h = int(h * 0.4)
+
+        x1 = w // 2 - roi_w // 2
+        y1 = h // 2 - roi_h // 2
+        x2 = x1 + roi_w
+        y2 = y1 + roi_h
+
+        roi = image[y1:y2, x1:x2]
+
+        roi = cv2.resize(
+            roi,
+            None,
+            fx=0.25,
+            fy=0.25,
+            interpolation=cv2.INTER_AREA
+        )
+
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+
+        lap = cv2.Laplacian(gray, cv2.CV_32F, ksize=3)
+        sharpness = float(np.mean(lap * lap))
 
         self.sharpness_callback(sharpness)
 
-        return sharpness
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
 
-    def get_raw_sharpness(self, num_images=2):
-        sharpness = 0
+        return sharpness, elapsed_ms
 
-        for _ in range(num_images):
-            image = self.frame_processor.capture_frame()
-            sharpness += self.find_sharpness(image)
+    def auto_focus(self, focus_range=3000, z_velo=500, z_accel=10000, peak_found_threshold=100):
+        start_time = time.perf_counter()
 
-        return sharpness / num_images
+        default_z_velo = self.stage.get_z_velocity()
+        default_z_accel = self.stage.get_z_acceleration()
 
-    def discard_initial_frame(self, position):
-        self.stage.move_to_z(position)
-        self.stage.wait_until_not_busy()
+        self.stage.set_z_velocity(z_velo)
+        self.stage.set_z_acceleration(z_accel)
 
-        self.get_raw_sharpness(num_images=3)
+        current_z = self.stage.get_z_position()
 
-    def find_best_focus(self, z_start, z_end, steps, tolerance=0.2):
-        best_sharpness = -1
-        best_z = z_start
-        drops = 0
-
-        z_positions = [
-            z_start + i * (z_end - z_start) / steps
-            for i in range(steps + 1)
-        ]
+        z_start = current_z - focus_range
+        z_end = current_z + focus_range
 
         print(
-            f"Speed: {self.stage.get_z_velocity()}, "
-            f"Step: {int((z_end - z_start) / steps)}"
+            f"Starting autofocus | "
+            f"Current Z: {current_z:.1f} | "
+            f"Range: ±{focus_range} | "
+            f"Search: {z_start:.1f} to {z_end:.1f}"
         )
 
-        curr_z = self.stage.get_z_position()
+        def find_peak(peak_found_threshold=100):
 
-        # Start from the side closest to current Z
-        if abs(curr_z - z_positions[0]) < abs(curr_z - z_positions[-1]):
-            z_positions.reverse()
+            peak_found = False
+            best_sharpness = -1
+            best_z = -1
 
-        self.discard_initial_frame(z_positions[0])
+            last_frame_id = -1
+            is_not_busy_check = 0
 
-        for z in z_positions:
-            self.stage.move_to_z(z)
-            self.stage.wait_until_not_busy()
+            while is_not_busy_check < 10:
 
-            sharpness = self.get_raw_sharpness(num_images=3)
+                if self.stage.is_busy():
+                    is_not_busy_check = 0
+                else:
+                    is_not_busy_check += 1
 
-            print(
-                f"Z: {z:>12.1f} | "
-                f"Sharpness: {sharpness:>8.3f} | "
-                f"Best Sharpness: {best_sharpness:>8.3f} | "
-                f"Best Z: {best_z:>12.1f}"
-            )
+                frame, frame_id, z = self.get_latest_frame()
 
-            if sharpness > best_sharpness:
-                best_sharpness = sharpness
-                best_z = z
-                drops = 0
-            else:
-                if sharpness < best_sharpness - tolerance:
-                    drops += 1
+                if frame is None:
+                    time.sleep(0.001)
+                    continue
 
-            if drops >= 2:
-                print("Focus peak passed")
-                break
+                if frame_id == last_frame_id:
+                    time.sleep(0.001)
+                    continue
 
-        self.stage.move_to_z(best_z)
-        self.stage.wait_until_not_busy()
+                last_frame_id = frame_id
 
-        return best_z
+                sharpness, elapsed_ms = self.find_sharpness(frame)
 
-    def auto_focus(self, start_range=3000, accuracy=50, steps=20):
-        start_time = time.time()
+                if sharpness > best_sharpness:
+                    if sharpness > best_sharpness + peak_found_threshold:
+                        peak_found = True
 
-        self.app.disable_buttons()
-
-        try:
-            search_range = start_range
-            best_z = self.stage.get_z_position()
-
-            while search_range >= accuracy:
-                best_z = self.find_best_focus(
-                    best_z - search_range,
-                    best_z + search_range,
-                    steps
-                )
-
-                self.stage.move_to_z(best_z)
-                self.stage.wait_until_not_busy()
-
-                self.discard_initial_frame(best_z)
-
-                sharpness = self.get_raw_sharpness(num_images=3)
+                    best_sharpness = sharpness
+                    best_z = z
 
                 print(
+                    f"Busy: {self.stage.is_busy()} | "
+                    f"Z: {z:>12.1f} | "
+                    f"Sharpness: {sharpness:>10.3f} | "
                     f"Best Z: {best_z:>12.1f} | "
-                    f"Sharpness: {sharpness:>8.3f} | "
-                    f"Range: {search_range}"
+                    f"Best Sharpness: {best_sharpness:>10.3f} | "
+                    f"Time: {elapsed_ms:>8.2f}ms"
                 )
-                print("-----------------------------------")
 
-                search_range = int(search_range / (steps / 2))
+                if peak_found and sharpness < best_sharpness - peak_found_threshold:
+                    print("Peak passed, stopping Z motion")
+                    self.stage.stop_z()
+                    self.stage.wait_until_not_busy()
+                    break
 
-            print(f"Time taken: {time.time() - start_time:.2f}s")
+            return peak_found, best_sharpness, best_z
 
-        finally:
-            self.app.enable_buttons()
+        self.stage.move_to_z(z_start, wait=False)
+
+        peak_found, best_sharpness, best_z = find_peak(peak_found_threshold)
+        
+        if not peak_found:
+
+            if self.stop_focus_event.is_set():
+                return current_z
+
+            self.stage.move_to_z(z_end, wait=False)
+
+            peak_found, best_sharpness, best_z = find_peak(peak_found_threshold)
+
+        if best_sharpness < 0:
+            print("No valid focus frames found")
+            self.stage.move_to_z(current_z)
+            self.stage.wait_until_not_busy()
+            return current_z
+
+        time_taken = (time.perf_counter() - start_time)
+
+        print(
+            f"Autofocus complete | "
+            f"Best Z: {best_z:.1f} | "
+            f"Best Sharpness: {best_sharpness:.3f} | "
+            f"Time: {int(time_taken)}s"
+        )
+
+        self.stage.move_to_z(best_z, wait=True)
+
+        final_z = self.stage.get_z_position()
+
+        print(
+            f"Stage Position: {final_z:.1f} | "
+            f"Target Best Z: {best_z:.1f} | "
+            f"Error: {final_z - best_z:.1f}"
+        )
+
+        self.stage.set_z_velocity(default_z_velo)
+        self.stage.set_z_acceleration(default_z_accel)
+
+        return best_z

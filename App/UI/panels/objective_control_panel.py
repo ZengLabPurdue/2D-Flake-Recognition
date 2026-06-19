@@ -6,11 +6,11 @@ class ObjectiveControlPanel:
         self,
         parent,
         app,
-        stage_controller,
+        stage,
         turret_controller,
     ):
         self.parent = parent
-        self.stage = stage_controller
+        self.stage = stage
         self.app = app
         self.turret_controller = turret_controller
 

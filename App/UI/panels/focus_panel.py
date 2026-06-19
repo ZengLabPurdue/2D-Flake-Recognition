@@ -9,16 +9,18 @@ class FocusPanel:
         app,
         focus_controller,
         default_range=1000,
-        default_accuracy=10,
-        default_steps=20,
+        default_velocity=500,
+        default_acceleration=10000,
+        default_peak_threshold=100,
     ):
         self.parent = parent
         self.app = app
         self.focus_controller = focus_controller
 
         self.default_range = default_range
-        self.default_accuracy = default_accuracy
-        self.default_steps = default_steps
+        self.default_velocity = default_velocity
+        self.default_acceleration = default_acceleration
+        self.default_peak_threshold = default_peak_threshold
 
         self.sharpness_var = tk.StringVar(value="Sharpness: Unknown")
 
@@ -29,7 +31,7 @@ class FocusPanel:
             self.parent,
             bg="#f0f0f0",
             width=204,
-            height=205
+            height=235
         )
         panel.place(relx=1.0, rely=0.0, anchor="ne")
 
@@ -37,7 +39,7 @@ class FocusPanel:
             panel,
             bg="white",
             width=200,
-            height=203
+            height=233
         )
         background.place(x=2, y=0)
 
@@ -80,41 +82,59 @@ class FocusPanel:
         )
         self.range_entry.place(relx=0.0, rely=0.0, x=entry_x, y=65)
 
-        accuracy_label = Label(
+        velocity_label = Label(
             panel,
-            text="Accuracy:",
+            text="Velocity:",
             bg="white",
             fg="black",
             width=15,
             anchor="e"
         )
-        accuracy_label.place(relx=0.0, rely=0.0, x=label_x, y=95)
+        velocity_label.place(relx=0.0, rely=0.0, x=label_x, y=95)
 
-        self.accuracy_var = StringVar(value=str(self.default_accuracy))
-        self.accuracy_entry = ttk.Entry(
+        self.velocity_var = StringVar(value=str(self.default_velocity))
+        self.velocity_entry = ttk.Entry(
             panel,
-            textvariable=self.accuracy_var,
+            textvariable=self.velocity_var,
             width=8
         )
-        self.accuracy_entry.place(relx=0.0, rely=0.0, x=entry_x, y=95)
+        self.velocity_entry.place(relx=0.0, rely=0.0, x=entry_x, y=95)
 
-        steps_label = Label(
+        acceleration_label = Label(
             panel,
-            text="Num Steps:",
+            text="Acceleration:",
             bg="white",
             fg="black",
             width=15,
             anchor="e"
         )
-        steps_label.place(relx=0.0, rely=0.0, x=label_x, y=125)
+        acceleration_label.place(relx=0.0, rely=0.0, x=label_x, y=125)
 
-        self.steps_var = StringVar(value=str(self.default_steps))
-        self.steps_entry = ttk.Entry(
+        self.acceleration_var = StringVar(value=str(self.default_acceleration))
+        self.acceleration_entry = ttk.Entry(
             panel,
-            textvariable=self.steps_var,
+            textvariable=self.acceleration_var,
             width=8
         )
-        self.steps_entry.place(relx=0.0, rely=0.0, x=entry_x, y=125)
+        self.acceleration_entry.place(relx=0.0, rely=0.0, x=entry_x, y=125)
+
+        peak_threshold_label = Label(
+            panel,
+            text="Peak Threshold:",
+            bg="white",
+            fg="black",
+            width=15,
+            anchor="e"
+        )
+        peak_threshold_label.place(relx=0.0, rely=0.0, x=label_x, y=155)
+
+        self.peak_threshold_var = StringVar(value=str(self.default_peak_threshold))
+        self.peak_threshold_entry = ttk.Entry(
+            panel,
+            textvariable=self.peak_threshold_var,
+            width=8
+        )
+        self.peak_threshold_entry.place(relx=0.0, rely=0.0, x=entry_x, y=155)
 
         self.auto_focus_btn = ttk.Button(
             panel,
@@ -122,7 +142,7 @@ class FocusPanel:
             style="Normal.TButton",
             command=self.run_auto_focus
         )
-        self.auto_focus_btn.place(relx=0.5, y=160, anchor="n")
+        self.auto_focus_btn.place(relx=0.5, y=190, anchor="n")
 
         self.app.register_button(self.auto_focus_btn)
 
@@ -133,16 +153,13 @@ class FocusPanel:
 
     def run_auto_focus(self):
         try:
-            start_range = int(self.range_var.get())
-            accuracy = int(self.accuracy_var.get())
-            steps = int(self.steps_var.get())
+            focus_range = int(self.range_var.get())
+            velocity = int(self.velocity_var.get())
+            acceleration = int(self.acceleration_var.get())
+            peak_threshold = int(self.peak_threshold_var.get())
 
         except ValueError:
             self.sharpness_var.set("Invalid focus values")
             return
 
-        self.focus_controller.auto_focus(
-            start_range=start_range,
-            accuracy=accuracy,
-            steps=steps
-        )
+        self.focus_controller.start_auto_focus_thread(focus_range, velocity, acceleration, peak_threshold)
