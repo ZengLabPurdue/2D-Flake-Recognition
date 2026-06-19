@@ -13,7 +13,7 @@ from config import CROP_RATIO
 
 from Mapping.mapper import Mapper
 from Scanning.scan_manager import ScanManager
-from App.Hardware.stage_api import stage
+from Hardware.stage_api import stage
 from Hardware.turret_controller import TurretController
 from UI.panels.info_panel import InfoPanel
 from UI.panels.stage_control_panel import StageControlPanel
@@ -26,7 +26,7 @@ from UI.panels.exposure_panel import ExposurePanel
 from Imaging.frame_processing import FrameProcessor
 from Imaging.focus import FocusController
 
-DLL_PATH = os.getcwd() + r"\APIs\PriorSDK1.9.2\x64\PriorScientificSDK.dll"
+DLL_PATH = os.getcwd() + r"\Hardware\PriorSDK1.9.2\x64\PriorScientificSDK.dll"
 PRIOR_COM_PORT = sys.argv[1]
 TURRET_COM_PORT = sys.argv[2]
 

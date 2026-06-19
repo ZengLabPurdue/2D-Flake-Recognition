@@ -55,6 +55,7 @@ olympius_label.grid(row=1, column=0, padx=(0,10), pady=(0,10), sticky="e")
 olympius_args = StringVar(value=olympius_args_value)
 olympius_entry = ttk.Entry(frame, textvariable=olympius_args, width=10)
 olympius_entry.grid(row=1, column=1, pady=(0,10), sticky="w")
+
 olympius_entry.focus()
 
 confirm_btn = ttk.Button(frame, text="Launch", command=on_close)
