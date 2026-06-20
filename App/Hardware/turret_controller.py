@@ -48,6 +48,8 @@ class TurretController:
             self.stage.move_to_z(current_z + change_z)
             self.turn_to_position(position)
 
+            self.app.frame_processor.set_default_exposure()
+
             if position == 1:
                 self.start_auto_focus_thread(focus_range=500, z_velo=500, z_accel=10000, peak_found_threshold=100)
 
@@ -63,7 +65,8 @@ class TurretController:
                 pass
 
             elif position == 5:
-                #self.start_auto_focus_thread(focus_range=10, z_velo=3, z_accel=10000, peak_found_threshold=10)
+                self.app.frame_processor.set_auto_exposure(True)
+                self.start_auto_focus_thread(focus_range=10, z_velo=3, z_accel=10000, peak_found_threshold=10)
                 pass
 
             self.app.set_magnification(magnification)
