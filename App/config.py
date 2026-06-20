@@ -32,15 +32,21 @@ CROP_RATIO = {
 
 RELATIVE_Z = {
     "2X": 0,
-    "10X": 1250,
-    "20X": 4300,
-    "100X": 4300
+    "10X": 1000,
+    "20X": 1000,
+    "100X": 1000,
 }
 
 RESOLUTION = {
     "HIGH": 0,
     "MED" : 1, 
     "LOW": 2,
+}
+
+RESOLUTION_DISPLAY = {
+    "HIGH": "5440 × 3648",
+    "MED": "2736 × 1824",
+    "LOW": "1824 × 1216",
 }
 
 RESOLUTION_DIM = {

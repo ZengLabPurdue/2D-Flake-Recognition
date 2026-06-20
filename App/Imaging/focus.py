@@ -22,7 +22,7 @@ class FocusController:
         self.stop_focus_event = threading.Event()
         self.focus_running = False
 
-    def start_auto_focus_thread(self, focus_range, velocity, acceleration, peak_threshold):
+    def start_auto_focus_thread(self, focus_range=1000, z_velo=500, z_accel=10000, peak_found_threshold=100):
         if self.focus_thread is not None and self.focus_thread.is_alive():
             print("Autofocus already running")
             return
@@ -34,15 +34,15 @@ class FocusController:
 
         self.focus_thread = threading.Thread(
             target=self._auto_focus_worker,
-            args=(focus_range, velocity, acceleration, peak_threshold,),
+            args=(focus_range, z_velo, z_accel, peak_found_threshold,),
             daemon=True,
         )
 
         self.focus_thread.start()
 
-    def _auto_focus_worker(self, focus_range, velocity, acceleration, peak_threshold):
+    def _auto_focus_worker(self, focus_range, z_velo, z_accel, peak_found_threshold):
         try:
-            self.auto_focus(focus_range=focus_range, z_velo=velocity, z_accel=acceleration, peak_found_threshold=peak_threshold)
+            self.auto_focus(focus_range=focus_range, z_velo=z_velo, z_accel=z_accel, peak_found_threshold=peak_found_threshold)
 
         except Exception as e:
             import traceback
@@ -129,8 +129,8 @@ class FocusController:
         def find_peak(peak_found_threshold=100):
 
             peak_found = False
-            best_sharpness = -1
-            best_z = -1
+            best_sharpness = None
+            best_z = None
 
             last_frame_id = -1
             is_not_busy_check = 0
@@ -156,10 +156,12 @@ class FocusController:
 
                 sharpness, elapsed_ms = self.find_sharpness(frame)
 
-                if sharpness > best_sharpness:
+                if best_sharpness is None:
+                    best_sharpness = sharpness
+                    best_z = z
+                elif sharpness > best_sharpness:
                     if sharpness > best_sharpness + peak_found_threshold:
                         peak_found = True
-
                     best_sharpness = sharpness
                     best_z = z
 
@@ -212,10 +214,13 @@ class FocusController:
 
         final_z = self.stage.get_z_position()
 
+        frame, _, _ = self.get_latest_frame()
+        sharpness, _ = self.find_sharpness(frame)
+
         print(
             f"Stage Position: {final_z:.1f} | "
             f"Target Best Z: {best_z:.1f} | "
-            f"Error: {final_z - best_z:.1f}"
+            f"Sharpness: {sharpness:>10.3f}"
         )
 
         self.stage.set_z_velocity(default_z_velo)

@@ -46,7 +46,7 @@ class ObjectiveControlPanel:
             fg="black",
             font=("TkDefaultFont", 13)
         )
-        title.place(relx=0.5, y=5, anchor="n")
+        title.place(relx=0.5, y=10, anchor="n")
 
         objective_label = tk.Label(
             panel,
@@ -118,4 +118,4 @@ class ObjectiveControlPanel:
     def change_objective(self, position):
         self.turret_controller.change_objective(position)
         self.objective_var.set(f"Objective: {position}")
-        self.app.clear_focus()
+        #self.app.clear_focus()

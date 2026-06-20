@@ -166,7 +166,7 @@ class FrameProcessor:
 
         self.hcam = amcam.Amcam.Open(cams[0].id)
 
-        self.reset_camera_settings(self.hcam)
+        self.reset_camera_settings()
 
         self.hcam.put_eSize(RESOLUTION[self.app.get_resolution()])
 
@@ -205,64 +205,6 @@ class FrameProcessor:
 
         max_speed = self.hcam.MaxSpeed()
         self.hcam.put_Speed(max_speed)
-
-    def reset_camera_settings(self, cam):
-        cam.put_AutoExpoEnable(False)
-
-        cam.put_ExpoTime(1500)
-        cam.put_ExpoAGain(100)
-
-        cam.put_Option(amcam.AMCAM_OPTION_RAW, 0)
-
-        cam.put_Option(amcam.AMCAM_OPTION_COLORMATIX, 1)
-        cam.put_Option(amcam.AMCAM_OPTION_LINEAR, 1)
-        cam.put_Option(amcam.AMCAM_OPTION_CURVE, 1)
-
-        cam.put_Option(amcam.AMCAM_OPTION_SHARPENING, 0)
-        cam.put_Option(amcam.AMCAM_OPTION_DENOISE, 0)
-        cam.put_Option(amcam.AMCAM_OPTION_DEFECT_PIXEL, 1)
-
-        cam.put_Brightness(0)
-        cam.put_Contrast(0)
-        cam.put_Gamma(100)
-        cam.put_Saturation(128)
-
-    def change_resolution(self, resolution):
-        self.app.set_resolution(resolution)
-
-        self.app.disable_buttons()
-
-        try:
-            if self.hcam is not None:
-                self.hcam.Close()
-
-            cams = amcam.Amcam.EnumV2()
-            self.hcam = amcam.Amcam.Open(cams[0].id)
-
-            self.reset_camera_settings(self.hcam)
-
-            self.hcam.put_eSize(self.hcam.put_eSize(RESOLUTION[self.app.get_resolution()]))
-
-            self.width, self.height = self.hcam.get_Size()
-
-            bufsize = ((self.width * 24 + 31) // 32 * 4) * self.height
-            self.buf = ctypes.create_string_buffer(bufsize)
-
-            self.frame_buffer.clear()
-            self.frame_id = 0
-            self.last_used_capture_frame_id = -1
-            self.last_processed_frame_id = -1
-
-            self.hcam.StartPullModeWithCallback(self.cameraCallback, self)
-
-            num_res = self.hcam.ResolutionNumber()
-            for i in range(num_res):
-                print(f"Resolution {i}: {self.hcam.get_Resolution(i)}")
-
-            print(f"Current Resolution: ({self.width}, {self.height})")
-
-        finally:
-            self.app.enable_buttons()
 
     def capture_frame(self, num_images=2):
         if len(self.frame_buffer) == 0:
@@ -428,3 +370,78 @@ class FrameProcessor:
 
         self.hcam = None
         self.buf = None
+
+    # ------------- Camera Settings -------------
+
+    def set_default_exposure(self):
+        self.hcam.put_AutoExpoEnable(False)
+
+        self.hcam.put_ExpoTime(1500)
+        self.hcam.put_ExpoAGain(100)        
+
+    def set_auto_exposure(self, active : bool):
+        self.hcam.put_AutoExpoEnable(active)        
+
+    def get_auto_exposure(self):
+        return int(float(self.hcam.get_AutoExpoTarget()))
+
+    def reset_camera_settings(self):
+        self.hcam.put_AutoExpoEnable(False)
+
+        self.hcam.put_ExpoTime(1500)
+        self.hcam.put_ExpoAGain(100)
+
+        self.hcam.put_Option(amcam.AMCAM_OPTION_RAW, 0)
+
+        self.hcam.put_Option(amcam.AMCAM_OPTION_COLORMATIX, 1)
+        self.hcam.put_Option(amcam.AMCAM_OPTION_LINEAR, 1)
+        self.hcam.put_Option(amcam.AMCAM_OPTION_CURVE, 1)
+
+        self.hcam.put_Option(amcam.AMCAM_OPTION_SHARPENING, 0)
+        self.hcam.put_Option(amcam.AMCAM_OPTION_DENOISE, 0)
+        self.hcam.put_Option(amcam.AMCAM_OPTION_DEFECT_PIXEL, 1)
+
+        self.hcam.put_Brightness(0)
+        self.hcam.put_Contrast(0)
+        self.hcam.put_Gamma(100)
+        self.hcam.put_Saturation(128)
+
+    def change_resolution(self, resolution):
+        self.app.set_resolution(resolution)
+
+        self.app.disable_buttons()
+
+        try:
+            if self.hcam is not None:
+                self.hcam.Close()
+
+            cams = amcam.Amcam.EnumV2()
+            self.hcam = amcam.Amcam.Open(cams[0].id)
+
+            self.reset_camera_settings()
+
+            self.hcam.put_eSize(RESOLUTION[self.app.get_resolution()])
+
+            self.width, self.height = self.hcam.get_Size()
+
+            bufsize = ((self.width * 24 + 31) // 32 * 4) * self.height
+            self.buf = ctypes.create_string_buffer(bufsize)
+
+            self.frame_buffer.clear()
+            self.frame_id = 0
+            self.last_used_capture_frame_id = -1
+            self.last_processed_frame_id = -1
+
+            self.hcam.StartPullModeWithCallback(self.cameraCallback, self)
+
+            num_res = self.hcam.ResolutionNumber()
+            for i in range(num_res):
+                print(f"Resolution {i}: {self.hcam.get_Resolution(i)}")
+
+            print(f"Current Resolution: ({self.width}, {self.height})")
+
+        except Exception as e:
+            print(f"Error changing resolution: {e}")
+
+        finally:
+            self.app.enable_buttons()

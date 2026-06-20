@@ -154,12 +154,12 @@ class FocusPanel:
     def run_auto_focus(self):
         try:
             focus_range = int(self.range_var.get())
-            velocity = int(self.velocity_var.get())
-            acceleration = int(self.acceleration_var.get())
-            peak_threshold = int(self.peak_threshold_var.get())
+            z_velo = int(self.velocity_var.get())
+            z_accel = int(self.acceleration_var.get())
+            peak_found_threshold = int(self.peak_threshold_var.get())
 
         except ValueError:
             self.sharpness_var.set("Invalid focus values")
             return
 
-        self.focus_controller.start_auto_focus_thread(focus_range, velocity, acceleration, peak_threshold)
+        self.focus_controller.start_auto_focus_thread(focus_range, z_velo, z_accel, peak_found_threshold)

@@ -229,6 +229,11 @@ class stage:
         self.acceleration = int(acceleration)
         self.cmd(f"controller.stage.acc.set {self.acceleration}")
 
+    def get_acceleration(self):
+        _, response = self.cmd("controller.stage.acc.get")
+        self.velocity = int(float(response))
+        return self.velocity
+
     def set_z_velocity(self, velocity):
         self.z_velocity = int(velocity)
         self.cmd(f"controller.z.speed.set {self.z_velocity}")
@@ -242,6 +247,11 @@ class stage:
     def set_z_acceleration(self, acceleration):
         self.z_acceleration = int(acceleration)
         self.cmd(f"controller.z.acc.set {self.z_acceleration}")
+
+    def get_z_acceleration(self):
+        _, response = self.cmd("controller.z.acc.get")
+        self.velocity = int(float(response))
+        return self.velocity
 
     # ---------------- Origin / Backlash ----------------
 

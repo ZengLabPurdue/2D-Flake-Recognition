@@ -8,12 +8,12 @@ class TurretController:
         app,
         stage,
         turret_port,
-        auto_focus,
+        start_auto_focus_thread,
     ):
         self.app = app
         self.stage = stage
         self.turret = turret(turret_port)
-        self.auto_focus = auto_focus
+        self.start_auto_focus_thread = start_auto_focus_thread
 
     def get_position(self):
         return self.turret.check_position()
@@ -49,17 +49,21 @@ class TurretController:
             self.turn_to_position(position)
 
             if position == 1:
-                self.auto_focus()
+                self.start_auto_focus_thread(focus_range=500, z_velo=500, z_accel=10000, peak_found_threshold=100)
 
             elif position == 2:
-                # self.auto_focus(start_range=500, accuracy=10, steps=20)
+                self.start_auto_focus_thread(focus_range=200, z_velo=50, z_accel=10000, peak_found_threshold=20)
                 pass
 
             elif position == 3:
-                self.auto_focus(start_range=200, accuracy=5, steps=20)
+                self.start_auto_focus_thread(focus_range=100, z_velo=10, z_accel=10000, peak_found_threshold=20)
+                pass
 
             elif position == 4:
-                # self.auto_focus(start_range=50, accuracy=2, steps=10)
+                pass
+
+            elif position == 5:
+                #self.start_auto_focus_thread(focus_range=10, z_velo=3, z_accel=10000, peak_found_threshold=10)
                 pass
 
             self.app.set_magnification(magnification)

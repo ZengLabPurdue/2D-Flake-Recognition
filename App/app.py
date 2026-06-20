@@ -9,7 +9,7 @@ import tkinter as tk
 from tkinter import ttk
 from PIL import Image, ImageTk
 
-from config import CROP_RATIO
+from config import CROP_RATIO, RESOLUTION_DISPLAY
 
 from Mapping.mapper import Mapper
 from Scanning.scan_manager import ScanManager
@@ -22,7 +22,7 @@ from UI.panels.focus_panel import FocusPanel
 from UI.panels.scan_status_panel import ScanStatusPanel
 from UI.panels.view_scans_panel import ViewScansPanel
 from UI.panels.capture_panel import CapturePanel
-from UI.panels.exposure_panel import ExposurePanel
+from UI.panels.camera_settings_panel import CameraSettingsPanel
 from Imaging.frame_processing import FrameProcessor
 from Imaging.focus import FocusController
 
@@ -80,7 +80,7 @@ class App:
             app=self,
             stage=self.stage,
             turret_port=TURRET_COM_PORT,
-            auto_focus=self.focus_controller.start_auto_focus_thread,
+            start_auto_focus_thread=self.focus_controller.start_auto_focus_thread,
         )
 
         self.info_panel = InfoPanel(parent=self.main_frame)
@@ -127,9 +127,12 @@ class App:
             save_image=self.frame_processor.save_image,
         )
 
-        self.exposure_panel = ExposurePanel(
-            parent=self.main_frame,
+        self.camera_settings_panel = CameraSettingsPanel(
+            parent=self.root,
             get_camera=self.frame_processor.get_camera,
+            resolution_options=RESOLUTION_DISPLAY,
+            get_resolution=self.get_resolution,
+            change_resolution_callback=self.frame_processor.change_resolution,
         )
 
         self.focus_panel = FocusPanel(
@@ -171,8 +174,8 @@ class App:
         })
 
         self.panels.append({
-            "name": "Adjust Exposure Panel",
-            "frame": self.exposure_panel.frame,
+            "name": "Camera Settings Panel",
+            "frame": self.camera_settings_panel.frame,
             "var": BooleanVar(value=False)
         })
 
@@ -395,8 +398,12 @@ class App:
 
     def clear_focus(self, event):
         widget = event.widget
+        widget_path = str(widget).lower()
 
-        if isinstance(widget, (ttk.Combobox, ttk.Entry)):
+        if isinstance(widget, (ttk.Combobox, ttk.Entry, tk.Entry)):
+            return
+        
+        if "popdown" in widget_path or "combobox" in widget_path:
             return
 
         self.root.focus_set()
