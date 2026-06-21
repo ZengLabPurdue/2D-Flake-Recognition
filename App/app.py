@@ -335,6 +335,8 @@ class App:
             img_rgb = img_rgb.copy()
             cv2.rectangle(img_rgb, (x1, y1), (x2, y2), (0, 255, 0), 5)
 
+            cv2.circle(img_rgb, (cx, cy), radius=5, color=(255, 0, 0), thickness=-1)
+
         img_pil = Image.fromarray(img_rgb)
 
         lbl_w = self.img_label.winfo_width() or self.width
