@@ -1,4 +1,4 @@
-from config import RELATIVE_Z
+from config import RELATIVE_XY, RELATIVE_Z
 from Hardware.turret_api import turret
 
 class TurretController:
@@ -23,11 +23,11 @@ class TurretController:
 
     def change_objective(self, position):
         objective_map = {
-            1: ("2X", RELATIVE_Z["2X"]),
-            2: ("10X", RELATIVE_Z["10X"]),
-            3: ("20X", RELATIVE_Z["20X"]),
-            4: (None, None),
-            5: ("100X", RELATIVE_Z["100X"]),
+            1: ("2X", RELATIVE_XY["2X"]["X"], RELATIVE_XY["2X"]["Y"], RELATIVE_Z["2X"]),
+            2: ("10X", RELATIVE_XY["10X"]["X"], RELATIVE_XY["10X"]["Y"], RELATIVE_Z["10X"]),
+            3: ("20X", RELATIVE_XY["20X"]["X"], RELATIVE_XY["20X"]["Y"], RELATIVE_Z["20X"]),
+            4: (None, None, None, None),
+            5: ("100X", RELATIVE_XY["100X"]["X"], RELATIVE_XY["100X"]["Y"], RELATIVE_Z["100X"]),
         }
 
         self.app.disable_buttons()
@@ -38,13 +38,16 @@ class TurretController:
             if position == current_position:
                 return
 
-            current_z = self.stage.get_z_position()
+            current_x, current_y, current_z = self.stage.get_position()
 
-            _, current_rel_z = objective_map.get(current_position, (None, 0))
-            magnification, target_rel_z = objective_map.get(position, (None, 0))
+            _, current_rel_x, current_rel_y, current_rel_z = objective_map[current_position]
+            magnification, target_rel_x, target_rel_y, target_rel_z = objective_map[position]
 
+            change_x = target_rel_x - current_rel_x
+            change_y = target_rel_y - current_rel_y
             change_z = target_rel_z - current_rel_z
 
+            self.stage.move_to_xy(current_x + change_x, current_y + change_y)
             self.stage.move_to_z(current_z + change_z)
             self.turn_to_position(position)
 
@@ -58,7 +61,7 @@ class TurretController:
                 pass
 
             elif position == 3:
-                self.start_auto_focus_thread(focus_range=100, z_velo=10, z_accel=10000, peak_found_threshold=20)
+                self.start_auto_focus_thread(focus_range=100, z_velo=25, z_accel=10000, peak_found_threshold=20)
                 pass
 
             elif position == 4:
@@ -66,7 +69,7 @@ class TurretController:
 
             elif position == 5:
                 self.app.frame_processor.set_auto_exposure(True)
-                self.start_auto_focus_thread(focus_range=10, z_velo=3, z_accel=10000, peak_found_threshold=10)
+                self.start_auto_focus_thread(focus_range=20, z_velo=5, z_accel=10000, peak_found_threshold=10)
                 pass
 
             self.app.set_magnification(magnification)

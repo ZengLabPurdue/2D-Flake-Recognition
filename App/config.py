@@ -5,8 +5,6 @@ import cv2
 
 HOME_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
 
-FLATFIELD_IMG = cv2.imread(str(HOME_DIR / "Flatfields" / "flatfield_2x_med_smoothed.png"))
-
 PROCESS_FRAME_RATE = 30
 
 DEFAULT_EXPOSURE = 60
@@ -35,6 +33,25 @@ RELATIVE_Z = {
     "10X": 1000,
     "20X": 1000,
     "100X": 1000,
+}
+
+RELATIVE_XY = {
+    "2X": {
+        "X": 0,
+        "Y": 0,
+    },
+    "10X": {
+        "X": 350,
+        "Y": 75,
+    },
+    "20X": {
+        "X": 400,
+        "Y": 60,
+    },
+    "100X": {
+        "X": 580,
+        "Y": 80,
+    },
 }
 
 RESOLUTION = {

@@ -6,7 +6,7 @@ from datetime import datetime
 import cv2
 import numpy as np
 
-from config import HOME_DIR, PIXEL_SIZE, RESOLUTION_DIM, CROP_RATIO, FLATFIELD_IMG
+from config import HOME_DIR, PIXEL_SIZE, RESOLUTION_DIM, CROP_RATIO
 from Imaging import vignetting_corrector
 
 from . import wafer_detection
@@ -210,8 +210,6 @@ class ScanManager:
         self.app.set_view("Map", False)
         self.turret_controller.change_objective(2)
 
-        input("Press Enter to start 10x scan...")
-
         if scan_path is None:
             path = HOME_DIR / "Scans" / datetime.now().strftime("10x (%Y-%m-%d) (%H-%M-%S)")
         else:
@@ -221,7 +219,8 @@ class ScanManager:
             x, y, _ = self.stage.get_position()
             scan_coordinates_10x = [[x, y, 10, 10]]
 
-        cropped_flatfield = self.frame_processor.crop_frame(FLATFIELD_IMG)
+        flatfield_img = cv2.imread(str(HOME_DIR / "Flatfields" / f"vignette_filter_{self.app.get_magnification.lower()}_{self.app.get_resolution().lower()}.png"))
+        cropped_flatfield = self.frame_processor.crop_frame(flatfield_img)
 
         for i, coordinates in enumerate(scan_coordinates_10x, start=1):
             wafer_time = time.time()
@@ -318,3 +317,118 @@ class ScanManager:
 
         print("10x scan imaging finished!")
         print(f"Time taken: {time.time() - start_time:.2f}s")
+
+    def create_vignette_filter(self, sigma=40):
+        
+        magnification = self.app.get_magnification()
+        self.app.open_panel("Status Panel")
+
+        print("Creating vignette filter running...")
+
+        start_time = time.time()
+
+        folder_path = HOME_DIR / "Saved Images" / "Vignette Filter"
+        img_paths = []
+
+        import shutil
+        if folder_path.exists():
+            shutil.rmtree(folder_path)
+
+        center_x, center_y, _ = self.stage.get_position()
+
+        coords, total_frames = coordinate_generator.generate_rect_coords(10, 10)
+
+        self.update_scan_status(scan_type="Vignette Filter", stage="Vignette Filter", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
+
+        step_x = 400
+        step_y = 400
+
+        if magnification == "2X":
+            pass
+        elif magnification == "10X":
+            step_x /= 5
+            step_y /= 5
+        elif magnification == "20X":
+            step_x /= 2
+            step_y /= 2
+        elif magnification == "100X":
+            pass
+
+        for i, (offset_x, offset_y) in enumerate(coords, start=1):
+            target_x = (center_x + offset_x * step_x)
+            target_y = (center_y - offset_y * step_y)
+
+            self.stage.move_to_xy(target_x, target_y)
+            self.stage.wait_until_not_busy()
+
+            img = self.frame_processor.capture_frame_raw(num_images=10)
+
+            img_path = folder_path / f"img_{i}.png"
+            img_paths.append(img_path)
+
+            print(img is None)
+
+            self.frame_processor.save_image(image=img, save_dir=folder_path, filename=f"img_{i}.png")
+
+            stage_elapsed = time.time() - start_time
+
+            stage_elapsed_str = time.strftime("%H:%M:%S", time.gmtime(stage_elapsed))
+            progress_percent = f"{i}/{total_frames} ({i * 100 // total_frames}%)"
+
+            self.update_scan_status(progress=progress_percent, stage_elapsed_time=stage_elapsed_str, total_elapsed_time=stage_elapsed_str)
+
+        self.stage.move_to_xy(center_x, center_y)
+
+        print("Vignette filter imaging finished!")
+        print(f"Time taken: {time.time() - start_time:.2f}s")
+
+        input("Press ENTER to continue...")
+
+        sum_img = None
+        count = 0
+
+        '''
+        import os
+        img_paths = [
+            os.path.join(folder_path, f)
+            for f in os.listdir(folder_path)
+        ]
+        '''
+
+        for path in img_paths:
+            img = cv2.imread(str(path))
+
+            if img is None:
+                print(f"Skipping unreadable image: {path}")
+                continue
+            
+            img_float = img.astype(np.float64)
+
+            if sum_img is None:
+                sum_img = np.zeros_like(img_float)
+
+            sum_img += img_float
+            count += 1
+
+        if count == 0:
+            raise RuntimeError(f"No valid images found in {folder_path}")
+
+        avg_img = sum_img / count
+
+        b, g, r = cv2.split(avg_img)
+
+        b_blur = cv2.GaussianBlur(b, (0, 0), sigmaX=sigma, sigmaY=sigma)
+        g_blur = cv2.GaussianBlur(g, (0, 0), sigmaX=sigma, sigmaY=sigma)
+        r_blur = cv2.GaussianBlur(r, (0, 0), sigmaX=sigma, sigmaY=sigma)
+
+        vignette_filter_bgr = cv2.merge([b_blur, g_blur, r_blur])
+
+        vignette_filter = np.clip(vignette_filter_bgr, 0, 255).astype(np.uint8)
+
+        save_path = HOME_DIR / "Flatfields" / f"vignette_filter_{magnification.lower()}_{self.app.get_resolution().lower()}.png"
+
+        cv2.imwrite(save_path, vignette_filter)
+
+        print(f"Saved vignette image to: {save_path}")
+
+        return

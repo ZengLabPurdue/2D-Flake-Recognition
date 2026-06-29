@@ -270,8 +270,6 @@ class FrameProcessor:
 
         while count < num_images:
             try:
-                print(f"Capturing frame {count + 1}/{num_images}...")
-
                 data = self.frame_buffer[-1]
 
                 if data["stage_busy"]:

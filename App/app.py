@@ -97,6 +97,8 @@ class App:
         )
         self.frame_processor.place_live_frame_on_map = self.mapper.place_live_frame_on_map
 
+        self.frame_processor.run_camera()
+
         self.scan_manager = ScanManager(
             root=self.root,
             app=self,
@@ -197,9 +199,7 @@ class App:
 
         self.root.bind_all("<Button-1>", self.clear_focus, add="+")
 
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-
-        self.frame_processor.run_camera()        
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)        
 
     # ------------- Initialization -------------
 
@@ -246,6 +246,7 @@ class App:
         scan_menu.add_command(label="Run Complete Scan", command=lambda: self.scan_manager.run_complete_scan(window=(11, 3)))
         scan_menu.add_command(label="Run 2x Scan", command=lambda: self.scan_manager.run_2x_scan(full_zoom=True))
         scan_menu.add_command(label="Run 10x Scan", command=self.scan_manager.run_10x_scan)
+        scan_menu.add_command(label="Create Vignette Filter", command=self.scan_manager.create_vignette_filter)
         menu_bar.add_cascade(label="Scan", menu=scan_menu)
 
         self.view_scans_panel.add_to_menu(menu_bar)

@@ -171,51 +171,6 @@ def vignetting_correction_poly_max(image_path, flatfield_path, degree=2):
     corrected = np.clip(corrected, 0, 255).astype(np.uint8)
     return cv2.cvtColor(corrected, cv2.COLOR_BGR2RGB)
 
-def average_images_in_folder(folder_path):
-    valid_exts = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
-
-    image_paths = [
-        os.path.join(folder_path, f)
-        for f in os.listdir(folder_path)
-        if f.lower().endswith(valid_exts)
-    ]
-
-    if len(image_paths) == 0:
-        print("No image files found in folder.")
-        return None
-
-    sum_img = None
-    count = 0
-    reference_shape = None
-
-    for path in image_paths:
-        img = cv2.imread(path)
-
-        if img is None:
-            print(f"Skipping unreadable file: {path}")
-            continue
-
-        if reference_shape is None:
-            reference_shape = img.shape
-            sum_img = np.zeros_like(img, dtype=np.float64)
-
-        if img.shape != reference_shape:
-            print(f"Skipping different-sized image: {path}")
-            continue
-
-        sum_img += img.astype(np.float64)
-        count += 1
-
-    if count == 0:
-        print("No valid images averaged.")
-        return None
-
-    avg_img = sum_img / count
-    avg_img = np.clip(avg_img, 0, 255).astype(np.uint8)
-
-    print(f"Averaged {count} images.")
-    return avg_img
-
 if __name__ == "__main__":
 
     image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
@@ -244,15 +199,3 @@ if __name__ == "__main__":
     corrected_image_gray = cv2.cvtColor(corrected_image, cv2.COLOR_RGB2GRAY)
     DataVisualizer.surface_graphing(corrected_image_gray)
     Util.save_image(corrected_image)
-
-    '''
-    from pathlib import Path
-
-    folder_path = Path(filedialog.askdirectory())
-
-    if folder_path:
-        avg_image = average_images_in_folder(str(folder_path))
-
-        if avg_image is not None:
-            cv2.imwrite(str(folder_path / "flatfield_average.png"), avg_image)
-    '''
