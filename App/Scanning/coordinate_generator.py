@@ -60,8 +60,8 @@ def generate_10x_scan_coordinates(
     camera_width, camera_height = camera_size
 
     resolution = app.get_resolution()
-    window_w = int(camera_width * CROP_RATIO["2X"]["x"] / scale / (PIXEL_SIZE["2X"][resolution] / PIXEL_SIZE["2X"][resolution]) / CROP_RATIO["10X"]["x"])
-    window_h = int(camera_height * CROP_RATIO["2X"]["y"] / scale / (PIXEL_SIZE["2X"][resolution] / PIXEL_SIZE["2X"][resolution]) / CROP_RATIO["10X"]["y"])
+    window_w = int(camera_width * CROP_RATIO["2X"]["x"] / scale / (PIXEL_SIZE["2X"][resolution] / PIXEL_SIZE["10X"][resolution]))
+    window_h = int(camera_height * CROP_RATIO["2X"]["y"] / scale / (PIXEL_SIZE["2X"][resolution] / PIXEL_SIZE["10X"][resolution]))
 
     scan_coordinates_10x = []
 
@@ -83,7 +83,11 @@ def generate_10x_scan_coordinates(
         start_pos_x = -(wafer_center_x - true_map.shape[1] / 2) * (PIXEL_SIZE["2X"][resolution] * RESOLUTION_DIM[resolution]["x"] * CROP_RATIO["2X"]["x"]) / (camera_width / scale * CROP_RATIO["2X"]["x"]) + scan_center_x
         start_pos_y = -(wafer_center_y - true_map.shape[0] / 2) * (PIXEL_SIZE["2X"][resolution] * RESOLUTION_DIM[resolution]["y"] * CROP_RATIO["2X"]["y"]) / (camera_height / scale * CROP_RATIO["2X"]["y"]) + scan_center_y
 
-        scan_coordinates_10x.append([round(start_pos_x), round(start_pos_y), num_windows_x, num_windows_y,])
+        scan_coordinates_10x.append([int(start_pos_x), int(start_pos_y), num_windows_x, num_windows_y,])
+
+        print(f"Scan Start: ({scan_center_x}, {scan_center_y})")
+        print(f"Wafer Center: ({start_pos_x}, {start_pos_y})")
+        print(f"Windows: ({num_windows_x}, {num_windows_y})")
 
         for i in range(num_windows_x):
             for j in range(num_windows_y):
@@ -95,4 +99,63 @@ def generate_10x_scan_coordinates(
         cv2.circle(true_map, (wafer_center_x, wafer_center_y), 8, (0, 0, 255), -1, cv2.LINE_AA)
         cv2.circle(true_map, (int(true_map.shape[1] / 2), int(true_map.shape[0] / 2)), 8, (255, 0, 0), -1, cv2.LINE_AA)
 
+        true_map_bgr = cv2.cvtColor(true_map, cv2.COLOR_RGB2BGR)
+        app.frame_processor.save_image(image=true_map_bgr)
+
         return scan_coordinates_10x
+    
+def generate_20x_scan_coordinates(
+    app,
+    wafers,
+    scan_center_x,
+    scan_center_y,
+    scale,
+    true_map,
+    camera_size,
+):
+    camera_width, camera_height = camera_size
+
+    resolution = app.get_resolution()
+    window_w = int(camera_width * CROP_RATIO["2X"]["x"] / scale / (PIXEL_SIZE["2X"][resolution] / PIXEL_SIZE["20X"][resolution]))
+    window_h = int(camera_height * CROP_RATIO["2X"]["y"] / scale / (PIXEL_SIZE["2X"][resolution] / PIXEL_SIZE["20X"][resolution]))
+
+    scan_coordinates_20x = []
+
+    for wafer in wafers:
+        x, y, w, h = wafer
+
+        num_windows_x = math.ceil(w / window_w)
+        num_windows_y = math.ceil(h / window_h)
+
+        grid_w = num_windows_x * window_w
+        grid_h = num_windows_y * window_h
+
+        wafer_center_x = x + w // 2
+        wafer_center_y = y + h // 2
+
+        start_x = max(0, wafer_center_x - grid_w // 2)
+        start_y = max(0, wafer_center_y - grid_h // 2)
+
+        start_pos_x = (wafer_center_x - true_map.shape[1] / 2) * (PIXEL_SIZE["2X"][resolution] * RESOLUTION_DIM[resolution]["x"] * CROP_RATIO["2X"]["x"]) / (camera_width / scale * CROP_RATIO["2X"]["x"]) + scan_center_x
+        start_pos_y = -(wafer_center_y - true_map.shape[0] / 2) * (PIXEL_SIZE["2X"][resolution] * RESOLUTION_DIM[resolution]["y"] * CROP_RATIO["2X"]["y"]) / (camera_height / scale * CROP_RATIO["2X"]["y"]) + scan_center_y
+
+        scan_coordinates_20x.append([int(start_pos_x), int(start_pos_y), num_windows_x, num_windows_y,])
+
+        print(f"Scan Start: ({scan_center_x}, {scan_center_y})")
+        print(f"Wafer Center: ({start_pos_x}, {start_pos_y})")
+        print(f"Windows: ({num_windows_x}, {num_windows_y})")
+
+        for i in range(num_windows_x):
+            for j in range(num_windows_y):
+                wx = start_x + i * window_w
+                wy = start_y + j * window_h
+
+                cv2.rectangle(true_map, (wx, wy), (wx + window_w, wy + window_h), (0, 255, 0), 5, cv2.LINE_AA)
+
+        cv2.circle(true_map, (wafer_center_x, wafer_center_y), 8, (0, 0, 255), -1, cv2.LINE_AA)
+        cv2.circle(true_map, (int(true_map.shape[1] / 2), int(true_map.shape[0] / 2)), 8, (255, 0, 0), -1, cv2.LINE_AA)
+
+        true_map_bgr = cv2.cvtColor(true_map, cv2.COLOR_RGB2BGR)
+        app.frame_processor.save_image(image=true_map_bgr)
+
+        return scan_coordinates_20x

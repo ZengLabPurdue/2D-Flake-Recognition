@@ -307,6 +307,7 @@ class FrameProcessor:
             crop_w = int(w * CROP_RATIO["2X"]["x"])
             crop_h = int(h * CROP_RATIO["2X"]["y"])
         elif self.app.get_magnification() == "10X":
+            print("Crop at 10x")
             crop_w = int(w * CROP_RATIO["10X"]["x"])
             crop_h = int(h * CROP_RATIO["10X"]["y"])
         elif self.app.get_magnification() == "20X":
@@ -328,7 +329,7 @@ class FrameProcessor:
 
         return frame[y1:y2, x1:x2]
 
-    def save_image(self, image=None, save_dir=None, filename=None, output=True):
+    def save_image(self, image=None, save_dir=None, filename=None, output=False):
         if image is None:
             image = self.capture_frame_raw()
 

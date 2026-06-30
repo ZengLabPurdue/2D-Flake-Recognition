@@ -53,7 +53,8 @@ class ScanManager:
         print("Wafers found")
         self.app.set_true_map(true_map)
         print("True map set")
-        scan_coordinates = coordinate_generator.generate_10x_scan_coordinates(self.app, wafers, center_x, center_y, scale_2x, self.app.get_true_map(), self.camera.get_Size())
+        #scan_coordinates = coordinate_generator.generate_10x_scan_coordinates(self.app, wafers, center_x, center_y, scale_2x, self.app.get_true_map(), self.camera.get_Size())
+        scan_coordinates = coordinate_generator.generate_20x_scan_coordinates(self.app, wafers, center_x, center_y, scale_2x, self.app.get_true_map(), self.camera.get_Size())
         print("Scan coordinates created")
 
         image_queue = Queue(maxsize=200)
@@ -71,8 +72,11 @@ class ScanManager:
         flake_detection_thread.start()
         print("Started flake detection thread")
 
-        print("Running 10x")
-        self.run_10x_scan(scan_coordinates, scan_path=scan_path, full_scan=True, full_scan_start_time=start_time, image_queue=image_queue)
+        #print("Running 10x")
+        #self.run_10x_scan(scan_coordinates, scan_path=scan_path, full_scan=True, full_scan_start_time=start_time, image_queue=image_queue)
+
+        print("Running 20x")
+        self.run_20x_scan(scan_coordinates, scan_path=scan_path, full_scan=True, full_scan_start_time=start_time, image_queue=image_queue)
 
         image_queue.put(None)
         flake_detection_thread.join()
@@ -80,7 +84,7 @@ class ScanManager:
         print("Full scan finished!")
         print(f"Time taken: {time.time() - start_time:.2f}s")
 
-        self.stage.move_to_xy(0, 0)
+        #self.stage.move_to_xy(0, 0)
         self.turret_controller.change_objective(1)
 
     def run_2x_scan(
@@ -108,8 +112,8 @@ class ScanManager:
         else:
             path = scan_path / "All Images" / "2x"
 
-        self.app.set_true_map(np.zeros((3000, 3000, 3), dtype=np.uint8))
-        self.app.set_filter_map(np.zeros((3000, 3000), dtype=np.uint8))
+        self.app.set_true_map(np.zeros((6000, 6000, 3), dtype=np.uint8))
+        self.app.set_filter_map(np.zeros((6000, 6000), dtype=np.uint8))
 
         center_x, center_y, _ = self.stage.get_position()
 
@@ -219,16 +223,16 @@ class ScanManager:
             x, y, _ = self.stage.get_position()
             scan_coordinates_10x = [[x, y, 10, 10]]
 
-        flatfield_img = cv2.imread(str(HOME_DIR / "Flatfields" / f"vignette_filter_{self.app.get_magnification.lower()}_{self.app.get_resolution().lower()}.png"))
+        flatfield_img = cv2.imread(str(HOME_DIR / "Flatfields" / f"vignette_filter_{self.app.get_magnification().lower()}_{self.app.get_resolution().lower()}.png"))
         cropped_flatfield = self.frame_processor.crop_frame(flatfield_img)
 
         for i, coordinates in enumerate(scan_coordinates_10x, start=1):
             wafer_time = time.time()
 
-            self.app.set_true_map(np.zeros((3000, 3000, 3), dtype=np.uint8))
+            self.app.set_true_map(np.zeros((6000, 6000, 3), dtype=np.uint8))
 
             if full_scan:
-                self.update_scan_status(stage=f"10x Scan - wafer {i} / {len(scan_coordinates_10x)}", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
+                self.update_scan_status(stage=f"10x Scan - Wafer {i} / {len(scan_coordinates_10x)}", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
             else:
                 self.update_scan_status(scan_type="10x Scan", stage="10x Scan", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
 
@@ -238,6 +242,8 @@ class ScanManager:
             coords, total_frames = coordinate_generator.generate_rect_coords(coordinates[2], coordinates[3])
 
             self.stage.move_to_xy(center_x, center_y)
+            print(f"Moving to: ({center_x}, {center_y})")
+
             self.stage.wait_until_not_busy()
 
             camera_width, camera_height = self.camera.get_Size()
@@ -316,6 +322,133 @@ class ScanManager:
             image_queue.put(None)
 
         print("10x scan imaging finished!")
+        print(f"Time taken: {time.time() - start_time:.2f}s")
+
+    def run_20x_scan(
+        self,
+        scan_coordinates_20x=None,
+        scan_path=None,
+        image_queue=None,
+        zoom=4,
+        full_scan=False,
+        full_scan_start_time=None,
+    ):
+        self.app.set_live_mapping(False)
+
+        self.app.open_panel("Status Panel")
+
+        start_time = time.time()
+
+        self.app.set_view("Map", False)
+        self.turret_controller.change_objective(2)
+
+        if scan_path is None:
+            path = HOME_DIR / "Scans" / datetime.now().strftime("20x (%Y-%m-%d) (%H-%M-%S)")
+        else:
+            path = scan_path / "All Images" / "20x"
+
+        if scan_coordinates_20x is None:
+            x, y, _ = self.stage.get_position()
+            scan_coordinates_20x = [[x, y, 10, 10]]
+
+        flatfield_img = cv2.imread(str(HOME_DIR / "Flatfields" / f"vignette_filter_{self.app.get_magnification().lower()}_{self.app.get_resolution().lower()}.png"))
+        cropped_flatfield = self.frame_processor.crop_frame(flatfield_img)
+
+        for i, coordinates in enumerate(scan_coordinates_20x, start=1):
+            wafer_time = time.time()
+
+            self.app.set_true_map(np.zeros((6000, 6000, 3), dtype=np.uint8))
+
+            if full_scan:
+                self.update_scan_status(stage=f"20x Scan - Wafer {i} / {len(scan_coordinates_20x)}", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
+            else:
+                self.update_scan_status(scan_type="20x Scan", stage="20x Scan", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
+
+            center_x = coordinates[0]
+            center_y = coordinates[1]
+
+            coords, total_frames = coordinate_generator.generate_rect_coords(coordinates[2], coordinates[3])
+
+            self.stage.move_to_xy(center_x, center_y)
+            print(f"Moving to: ({center_x}, {center_y})")
+            self.stage.wait_until_not_busy()
+
+            camera_width, camera_height = self.camera.get_Size()
+
+            max_zoom = max(zoom, int(camera_height / (self.app.get_true_map().shape[0] / coordinates[3])), int(camera_width / (self.app.get_true_map().shape[1] / coordinates[2])))
+
+            for j, (offset_x, offset_y) in enumerate(coords):
+                target_x = center_x + offset_x * PIXEL_SIZE["20X"][self.resolution] * RESOLUTION_DIM[self.resolution]["x"] * CROP_RATIO["20X"]["x"]
+                target_y = center_y - offset_y * PIXEL_SIZE["20X"][self.resolution] * RESOLUTION_DIM[self.resolution]["y"] * CROP_RATIO["20X"]["y"]
+
+                self.stage.move_to_xy(target_x, target_y)
+                self.stage.wait_until_not_busy()
+
+                img = self.frame_processor.capture_frame()
+
+                img = vignetting_corrector.correct_vignetting_effect(
+                    img,
+                    cropped_flatfield,
+                    reference_point=(img.shape[1] // 2, img.shape[0] // 2),
+                )
+
+                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+                image_path = path / f"wafer {i} ({center_x}, {center_y})" / "Raw" / f"img_20x_{j}.png"
+
+                image_path.parent.mkdir(parents=True, exist_ok=True)
+
+                self.frame_processor.save_image(image=img, filename=image_path)
+
+                if image_queue is not None:
+                    image_queue.put(image_path)
+
+                if self.app.get_view() == "Camera View":
+                    if self.app.get_filter():
+                        self.app.set_filter(False)
+
+                    self.root.after(0, lambda img=img: self.app.display_image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)))
+
+                true_map = self.app.get_true_map()
+                filter_map = self.app.get_filter_map()
+
+                map_x = int(filter_map.shape[1] / 2 - (offset_x + 0.5) * img_rgb.shape[1] / max_zoom)
+                map_y = int(filter_map.shape[0] / 2 + (offset_y - 0.5) * img_rgb.shape[0] / max_zoom)
+
+                img_small = img_rgb[::max_zoom, ::max_zoom]
+
+                x_start = max(0, map_x)
+                y_start = max(0, map_y)
+                x_end = min(filter_map.shape[1], x_start + img_small.shape[1])
+                y_end = min(filter_map.shape[0], y_start + img_small.shape[0])
+
+                true_map[y_start:y_end, x_start:x_end] = img_small[:y_end - y_start, :x_end - x_start,]
+
+                self.app.display_map()
+
+                stage_elapsed = time.time() - wafer_time
+
+                if full_scan_start_time is not None:
+                    total_elapsed = time.time() - full_scan_start_time
+                    total_elapsed_str = time.strftime("%H:%M:%S", time.gmtime(total_elapsed))
+                else:
+                    total_elapsed_str = time.strftime("%H:%M:%S", time.gmtime(stage_elapsed))
+
+                stage_elapsed_str = time.strftime("%H:%M:%S", time.gmtime(stage_elapsed))
+                progress_percent = f"{j + 1}/{total_frames} ({(j + 1) * 100 // total_frames}%)"
+
+                if full_scan:
+                    self.update_scan_status(progress=progress_percent, stage_elapsed_time=stage_elapsed_str, total_elapsed_time=total_elapsed_str)
+                else:
+                    self.update_scan_status(progress=progress_percent, stage_elapsed_time=stage_elapsed_str, total_elapsed_time=stage_elapsed_str)
+
+            print(f"Wafer {i} imaging finished!")
+            print(f"Time taken: {time.time() - wafer_time:.2f}s")
+
+        if image_queue is not None:
+            image_queue.put(None)
+
+        print("20x scan imaging finished!")
         print(f"Time taken: {time.time() - start_time:.2f}s")
 
     def create_vignette_filter(self, sigma=40):

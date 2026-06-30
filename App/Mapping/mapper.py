@@ -31,7 +31,7 @@ class Mapper:
 
         self.turret_controller.change_objective(1)
 
-        self.app.set_true_map(np.zeros((3000, 3000, 3), dtype=np.uint8))
+        self.app.set_true_map(np.zeros((6000, 6000, 3), dtype=np.uint8))
 
         self.stage_center_x, self.stage_center_y, _ = self.stage.get_position()
 
