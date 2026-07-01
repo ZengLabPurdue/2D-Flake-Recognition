@@ -95,7 +95,7 @@ class App:
             frame_processor=self.frame_processor,
             update_scan_status=self.scan_status_panel.update_status,
         )
-        self.frame_processor.place_live_frame_on_map = self.mapper.place_live_frame_on_map
+        self.frame_processor.place_frame_on_map = self.mapper.place_frame_on_map
 
         self.frame_processor.run_camera()
 
@@ -243,8 +243,8 @@ class App:
 
         scan_menu = Menu(menu_bar, tearoff=0)
         scan_menu.add_command(label="Run Complete Scan (1 Chip)", command=self.scan_manager.run_complete_scan)
-        scan_menu.add_command(label="Run Complete Scan", command=lambda: self.scan_manager.run_complete_scan(window=(11, 3)))
-        scan_menu.add_command(label="Run 2x Scan", command=lambda: self.scan_manager.run_2x_scan(full_zoom=True))
+        scan_menu.add_command(label="Run Full Stage Scan", command=lambda: self.scan_manager.run_complete_scan(window=(50, 25))) #TODO: Add required manual centering popup on stage and tune window size
+        scan_menu.add_command(label="Run 2x Scan", command=lambda: self.scan_manager.run_2x_scan(full_zoom=True)) #TODO: Add window size adjustability / popup
         scan_menu.add_command(label="Run 10x Scan", command=self.scan_manager.run_10x_scan)
         scan_menu.add_command(label="Run 20x Scan", command=self.scan_manager.run_20x_scan)
         scan_menu.add_command(label="Create Vignette Filter", command=self.scan_manager.create_vignette_filter)

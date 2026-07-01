@@ -2,7 +2,7 @@ import math
 import cv2
 from config import PIXEL_SIZE, CROP_RATIO, RESOLUTION_DIM
 
-def generate_rect_coords(x, y):
+def generate_rect_coords(x, y, div2=False):
     rect_coords = []
     total_frames = x * y
 
@@ -13,7 +13,10 @@ def generate_rect_coords(x, y):
             y_range = range(y - 1, -1, -1)
 
         for j in y_range:
-            rect_coords.append((i - x // 2, j - y // 2))
+            if div2:
+                rect_coords.append(((i - x // 2)/2, (j - y // 2)/2))
+            else:
+                rect_coords.append((i - x // 2, j - y // 2))
 
     return rect_coords, total_frames
 

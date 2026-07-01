@@ -25,7 +25,7 @@ class FrameProcessor:
         self.stage = stage
 
         self.get_live_mapping = get_live_mapping
-        self.place_live_frame_on_map = None
+        self.place_frame_on_map = None
 
         self.hcam = None
         self.buf = None
@@ -128,7 +128,7 @@ class FrameProcessor:
                 if self.capture_after_move:
                     self.capture_after_move = False
                     cropped = self.crop_frame(img)
-                    self.place_live_frame_on_map(cropped, zoom=3)
+                    self.place_frame_on_map(cropped, zoom=3)
 
             if self.app.get_view() == "Camera View":
                 if self.app.get_filter():
@@ -206,7 +206,7 @@ class FrameProcessor:
         max_speed = self.hcam.MaxSpeed()
         self.hcam.put_Speed(max_speed)
 
-    def capture_frame(self, num_images=2):
+    def capture_frame(self, num_images=2): #TODO: Figure out last position mixing bug
         if len(self.frame_buffer) == 0:
             print("No frames available.")
             return None
@@ -307,7 +307,6 @@ class FrameProcessor:
             crop_w = int(w * CROP_RATIO["2X"]["x"])
             crop_h = int(h * CROP_RATIO["2X"]["y"])
         elif self.app.get_magnification() == "10X":
-            print("Crop at 10x")
             crop_w = int(w * CROP_RATIO["10X"]["x"])
             crop_h = int(h * CROP_RATIO["10X"]["y"])
         elif self.app.get_magnification() == "20X":

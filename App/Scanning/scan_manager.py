@@ -453,15 +453,15 @@ class ScanManager:
         print("20x scan imaging finished!")
         print(f"Time taken: {time.time() - start_time:.2f}s")
 
-    def create_vignette_filter(self, sigma=40):
+    def create_vignette_filter(self, sigma=40, output=False):
         
         magnification = self.app.get_magnification()
         self.app.open_panel("Status Panel")
 
-        print("Creating vignette filter running...")
+        print("Creating vignette filter...")
 
         start_time = time.time()
-
+        
         folder_path = HOME_DIR / "Saved Images" / "Vignette Filter"
         img_paths = []
 
@@ -475,8 +475,8 @@ class ScanManager:
 
         self.update_scan_status(scan_type="Vignette Filter", stage="Vignette Filter", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
 
-        step_x = 400
-        step_y = 400
+        step_x = 300
+        step_y = 300
 
         if magnification == "2X":
             pass
@@ -498,10 +498,11 @@ class ScanManager:
 
             img = self.frame_processor.capture_frame_raw(num_images=10)
 
+            if img is not None and output:
+                print(f"Captured Image {i}/100")
+
             img_path = folder_path / f"img_{i}.png"
             img_paths.append(img_path)
-
-            print(img is None)
 
             self.frame_processor.save_image(image=img, save_dir=folder_path, filename=f"img_{i}.png")
 

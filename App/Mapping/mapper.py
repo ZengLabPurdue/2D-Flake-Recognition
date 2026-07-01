@@ -4,8 +4,10 @@ import cv2
 import numpy as np
 import tkinter as tk
 
-from config import PIXEL_SIZE, CROP_RATIO, RESOLUTION_DIM
+from config import HOME_DIR, PIXEL_SIZE, CROP_RATIO, RESOLUTION_DIM
 from Scanning.coordinate_generator import generate_rect_coords
+from Imaging import vignetting_corrector
+from Scanning import wafer_detection
 
 class Mapper:
 
@@ -57,7 +59,7 @@ class Mapper:
 
         self.app.set_view("Map", False)
 
-    def place_live_frame_on_map(self, img, zoom):
+    def place_frame_on_map(self, img, zoom, filter_img=None):
 
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
@@ -78,7 +80,6 @@ class Mapper:
         map_x = self.map_center_x + dx_px
         map_y = self.map_center_y + dy_px
 
-        '''
         if self.last_live_frame_rgb is not None:
         
             try:
@@ -111,6 +112,10 @@ class Mapper:
                     filename=f"orb_compare_{int(time.time() * 1000)}.png"
                 )
 
+                map_x = self.last_live_map_x + int(round(shift_x))
+                map_y = self.last_live_map_y + int(round(shift_y))
+
+                '''
                 MIN_ORB_SCORE = 0.25
                 MAX_REASONABLE_SHIFT = 250
 
@@ -123,15 +128,16 @@ class Mapper:
                     map_y = self.last_live_map_y + int(round(shift_y))
                 else:
                     print("ORB/RANSAC score too low or shift too large, using stage-based map position")
-
+                '''
+                    
             except Exception as e:
                 print("Error during ORB/RANSAC shift correction:", e)
 
         else:
             print("Skipping correction: no previous live frame yet")
-        '''
 
         true_map = self.app.get_true_map()
+        filter_map = self.app.get_filter_map()
             
         x_start = int(map_x - w // 2)
         y_start = int(map_y - h // 2)
@@ -155,12 +161,16 @@ class Mapper:
             return
 
         crop = img_rgb[crop_y0:crop_y1, crop_x0:crop_x1]
+        if filter_img is not None:
+            filter_crop = filter_img[crop_y0:crop_y1, crop_x0:crop_x1]
 
         existing = true_map[y0:y1, x0:x1]
 
         blended = cv2.addWeighted(existing, 0.5, crop, 0.5, 0)
         
         true_map[y0:y1, x0:x1] = crop
+        if filter_img is not None:
+            filter_map[y0:y1, x0:x1] = filter_crop
 
         self.app.set_true_map(true_map)
 
@@ -300,12 +310,19 @@ class Mapper:
 
         self.frame_processor.save_image(image=comparison, save_dir=save_dir, filename=filename, output=False)
 
-    def auto_map_2x(self, window=(5, 5), zoom=4):
+    def auto_map_2x(self, window=(5, 5), zoom=4, full_zoom=True):
 
         self.scan_running = True
 
+        camera_width, camera_height = self.frame_processor.get_camera().get_Size()
+
+        zoom = max(zoom, int(camera_height / (self.app.get_true_map().shape[0] / window[1])), int(camera_width / (self.app.get_true_map().shape[1] / window[0])))
+
+        if full_zoom:
+            zoom = max(int(camera_height / (self.app.get_true_map().shape[0] / window[1])), int(camera_width / (self.app.get_true_map().shape[1] / window[0])))
+
         try:
-            self.app.set_view("Map", False)
+            self.app.set_view("Map", True)
 
             self.stage.set_origin()
 
@@ -314,6 +331,9 @@ class Mapper:
             coords, total_frames = generate_rect_coords(window[1], window[0])
 
             print(f"Generated {total_frames} coordinates for mapping: {coords}")
+
+            flatfield_img = cv2.imread(str(HOME_DIR / "Flatfields" / f"vignette_filter_{self.app.get_magnification().lower()}_{self.app.get_resolution().lower()}.png"))
+            cropped_flatfield = self.frame_processor.crop_frame(flatfield_img)
 
             for i, (offset_x, offset_y) in enumerate(coords, start=1):
 
@@ -327,11 +347,19 @@ class Mapper:
 
                 img = self.frame_processor.capture_frame(num_images=2)
 
+                img = vignetting_corrector.correct_vignetting_effect(
+                    img,
+                    cropped_flatfield,
+                    reference_point=(img.shape[1] // 2, img.shape[0] // 2),
+                )
+
                 if img is None:
                     print("No image captured, skipping this tile.")
                     continue
 
-                self.place_live_frame_on_map(img, zoom=zoom)
+                filter_img = wafer_detection.wafer_filter(img, display=False)
+
+                self.place_frame_on_map(img, zoom=zoom, filter_img=filter_img)
 
                 progress_percent = f"{i}/{total_frames}"
 
