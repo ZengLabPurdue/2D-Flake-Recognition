@@ -40,8 +40,8 @@ class App:
         self.map_canvas = Canvas(self.main_frame)
         self.map_canvas.pack(fill=BOTH, expand=True)
 
-        self.true_map = np.zeros((3000, 3000, 3), dtype=np.uint8)
-        self.filter_map = np.zeros((3000, 3000), dtype=np.int8)
+        self.true_map = np.zeros((6000, 6000, 3), dtype=np.uint8)
+        self.filter_map = np.zeros((6000, 6000), dtype=np.int8)
 
         self.img_label = Label(self.main_frame, bg="#f0f0f0")
         self.img_label.pack(fill=BOTH, expand=True)
@@ -246,6 +246,7 @@ class App:
         scan_menu.add_command(label="Run Complete Scan", command=lambda: self.scan_manager.run_complete_scan(window=(11, 3)))
         scan_menu.add_command(label="Run 2x Scan", command=lambda: self.scan_manager.run_2x_scan(full_zoom=True))
         scan_menu.add_command(label="Run 10x Scan", command=self.scan_manager.run_10x_scan)
+        scan_menu.add_command(label="Run 20x Scan", command=self.scan_manager.run_20x_scan)
         scan_menu.add_command(label="Create Vignette Filter", command=self.scan_manager.create_vignette_filter)
         menu_bar.add_cascade(label="Scan", menu=scan_menu)
 

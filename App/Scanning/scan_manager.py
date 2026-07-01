@@ -7,10 +7,11 @@ import cv2
 import numpy as np
 
 from config import HOME_DIR, PIXEL_SIZE, RESOLUTION_DIM, CROP_RATIO
+
 from Imaging import vignetting_corrector
 
-from . import wafer_detection
 from . import flake_detection
+from . import wafer_detection
 from . import coordinate_generator
 
 class ScanManager:
@@ -60,8 +61,10 @@ class ScanManager:
         image_queue = Queue(maxsize=200)
         print("Queue made")
 
+        flake_detector = flake_detection.Flake_Detector()
+
         flake_detection_thread = threading.Thread(
-            target=flake_detection.flake_detection_10x,
+            target=flake_detector.flake_detection,
             kwargs={
                 "image_queue": image_queue,
                 "frame_processor" : self.frame_processor
@@ -283,17 +286,16 @@ class ScanManager:
                     self.root.after(0, lambda img=img: self.app.display_image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)))
 
                 true_map = self.app.get_true_map()
-                filter_map = self.app.get_filter_map()
 
-                map_x = int(filter_map.shape[1] / 2 - (offset_x + 0.5) * img_rgb.shape[1] / max_zoom)
-                map_y = int(filter_map.shape[0] / 2 + (offset_y - 0.5) * img_rgb.shape[0] / max_zoom)
+                map_x = int(true_map.shape[1] / 2 - (offset_x + 0.5) * img_rgb.shape[1] / max_zoom)
+                map_y = int(true_map.shape[0] / 2 + (offset_y - 0.5) * img_rgb.shape[0] / max_zoom)
 
                 img_small = img_rgb[::max_zoom, ::max_zoom]
 
                 x_start = max(0, map_x)
                 y_start = max(0, map_y)
-                x_end = min(filter_map.shape[1], x_start + img_small.shape[1])
-                y_end = min(filter_map.shape[0], y_start + img_small.shape[0])
+                x_end = min(true_map.shape[1], x_start + img_small.shape[1])
+                y_end = min(true_map.shape[0], y_start + img_small.shape[0])
 
                 true_map[y_start:y_end, x_start:x_end] = img_small[:y_end - y_start, :x_end - x_start,]
 
@@ -341,6 +343,7 @@ class ScanManager:
 
         self.app.set_view("Map", False)
         self.turret_controller.change_objective(2)
+        self.turret_controller.change_objective(3)
 
         if scan_path is None:
             path = HOME_DIR / "Scans" / datetime.now().strftime("20x (%Y-%m-%d) (%H-%M-%S)")
@@ -349,7 +352,7 @@ class ScanManager:
 
         if scan_coordinates_20x is None:
             x, y, _ = self.stage.get_position()
-            scan_coordinates_20x = [[x, y, 10, 10]]
+            scan_coordinates_20x = [[x, y, 22, 30]]
 
         flatfield_img = cv2.imread(str(HOME_DIR / "Flatfields" / f"vignette_filter_{self.app.get_magnification().lower()}_{self.app.get_resolution().lower()}.png"))
         cropped_flatfield = self.frame_processor.crop_frame(flatfield_img)
@@ -410,17 +413,16 @@ class ScanManager:
                     self.root.after(0, lambda img=img: self.app.display_image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)))
 
                 true_map = self.app.get_true_map()
-                filter_map = self.app.get_filter_map()
 
-                map_x = int(filter_map.shape[1] / 2 - (offset_x + 0.5) * img_rgb.shape[1] / max_zoom)
-                map_y = int(filter_map.shape[0] / 2 + (offset_y - 0.5) * img_rgb.shape[0] / max_zoom)
+                map_x = int(true_map.shape[1] / 2 - (offset_x + 0.5) * img_rgb.shape[1] / max_zoom)
+                map_y = int(true_map.shape[0] / 2 + (offset_y - 0.5) * img_rgb.shape[0] / max_zoom)
 
                 img_small = img_rgb[::max_zoom, ::max_zoom]
 
                 x_start = max(0, map_x)
                 y_start = max(0, map_y)
-                x_end = min(filter_map.shape[1], x_start + img_small.shape[1])
-                y_end = min(filter_map.shape[0], y_start + img_small.shape[0])
+                x_end = min(true_map.shape[1], x_start + img_small.shape[1])
+                y_end = min(true_map.shape[0], y_start + img_small.shape[0])
 
                 true_map[y_start:y_end, x_start:x_end] = img_small[:y_end - y_start, :x_end - x_start,]
 

@@ -60,8 +60,8 @@ def generate_10x_scan_coordinates(
     camera_width, camera_height = camera_size
 
     resolution = app.get_resolution()
-    window_w = int(camera_width * CROP_RATIO["2X"]["x"] / scale / (PIXEL_SIZE["2X"][resolution] / PIXEL_SIZE["10X"][resolution]))
-    window_h = int(camera_height * CROP_RATIO["2X"]["y"] / scale / (PIXEL_SIZE["2X"][resolution] / PIXEL_SIZE["10X"][resolution]))
+    window_w = int(camera_width / scale / (PIXEL_SIZE["2X"][resolution] / PIXEL_SIZE["10X"][resolution]) * CROP_RATIO["10X"]["x"])
+    window_h = int(camera_height / scale / (PIXEL_SIZE["2X"][resolution] / PIXEL_SIZE["10X"][resolution]) * CROP_RATIO["10X"]["y"])
 
     scan_coordinates_10x = []
 
@@ -116,8 +116,8 @@ def generate_20x_scan_coordinates(
     camera_width, camera_height = camera_size
 
     resolution = app.get_resolution()
-    window_w = int(camera_width * CROP_RATIO["2X"]["x"] / scale / (PIXEL_SIZE["2X"][resolution] / PIXEL_SIZE["20X"][resolution]))
-    window_h = int(camera_height * CROP_RATIO["2X"]["y"] / scale / (PIXEL_SIZE["2X"][resolution] / PIXEL_SIZE["20X"][resolution]))
+    window_w = int(camera_width / scale / (PIXEL_SIZE["2X"][resolution] / PIXEL_SIZE["20X"][resolution]) * CROP_RATIO["20X"]["x"])
+    window_h = int(camera_height / scale / (PIXEL_SIZE["2X"][resolution] / PIXEL_SIZE["20X"][resolution]) * CROP_RATIO["20X"]["y"])
 
     scan_coordinates_20x = []
 
