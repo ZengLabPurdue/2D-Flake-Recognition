@@ -235,9 +235,9 @@ class Flake_Identifier():
             crop = crop.astype(np.float32) / 255.0
             crop_filename = f"crop_{i}.png"
 
-            crop_path = os.path.join(save_dir, crop_filename)
-
-            plt.imsave(crop_path, crop)
+            if save_dir is not None: 
+                crop_path = os.path.join(save_dir, crop_filename)
+                plt.imsave(crop_path, crop)
 
             input_img = np.expand_dims(crop, axis=0)
         
