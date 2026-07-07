@@ -310,16 +310,16 @@ class Mapper:
 
         self.frame_processor.save_image(image=comparison, save_dir=save_dir, filename=filename, output=False)
 
-    def auto_map_2x(self, window=(5, 5), zoom=4, full_zoom=True):
+    def auto_map_2x(self, window=(5, 5), zoom=3, full_zoom=True):
 
         self.scan_running = True
 
         camera_width, camera_height = self.frame_processor.get_camera().get_Size()
 
-        zoom = max(zoom, int(camera_height / (self.app.get_true_map().shape[0] / window[1])), int(camera_width / (self.app.get_true_map().shape[1] / window[0])))
+        #zoom = max(zoom, int(camera_height / (self.app.get_true_map().shape[0] / window[1])), int(camera_width / (self.app.get_true_map().shape[1] / window[0])))
 
-        if full_zoom:
-            zoom = max(int(camera_height / (self.app.get_true_map().shape[0] / window[1])), int(camera_width / (self.app.get_true_map().shape[1] / window[0])))
+        #if full_zoom:
+        #    zoom = max(int(camera_height / (self.app.get_true_map().shape[0] / window[1])), int(camera_width / (self.app.get_true_map().shape[1] / window[0])))
 
         try:
             self.app.set_view("Map", True)
@@ -378,7 +378,7 @@ class Mapper:
 
     def capture_area(self, window=(7, 7), zoom=4):
 
-        self.open_panel("Status Panel")
+        self.app.open_panel("Status Panel")
 
         #self.turret_controller.change_objective(1)
 

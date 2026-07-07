@@ -54,8 +54,8 @@ class ScanManager:
         print("Wafers found")
         self.app.set_true_map(true_map)
         print("True map set")
-        #scan_coordinates = coordinate_generator.generate_10x_scan_coordinates(self.app, wafers, center_x, center_y, scale_2x, self.app.get_true_map(), self.camera.get_Size())
-        scan_coordinates = coordinate_generator.generate_20x_scan_coordinates(self.app, wafers, center_x, center_y, scale_2x, self.app.get_true_map(), self.camera.get_Size())
+        scan_coordinates = coordinate_generator.generate_10x_scan_coordinates(self.app, wafers, center_x, center_y, scale_2x, self.app.get_true_map(), self.camera.get_Size())
+        #scan_coordinates = coordinate_generator.generate_20x_scan_coordinates(self.app, wafers, center_x, center_y, scale_2x, self.app.get_true_map(), self.camera.get_Size())
         print("Scan coordinates created")
 
         image_queue = Queue(maxsize=200)
@@ -75,11 +75,11 @@ class ScanManager:
         flake_detection_thread.start()
         print("Started flake detection thread")
 
-        #print("Running 10x")
-        #self.run_10x_scan(scan_coordinates, scan_path=scan_path, full_scan=True, full_scan_start_time=start_time, image_queue=image_queue)
+        print("Running 10x")
+        self.run_10x_scan(scan_coordinates, scan_path=scan_path, full_scan=True, full_scan_start_time=start_time, image_queue=image_queue)
 
-        print("Running 20x")
-        self.run_20x_scan(scan_coordinates, scan_path=scan_path, full_scan=True, full_scan_start_time=start_time, image_queue=image_queue)
+        #print("Running 20x")
+        #self.run_20x_scan(scan_coordinates, scan_path=scan_path, full_scan=True, full_scan_start_time=start_time, image_queue=image_queue)
 
         image_queue.put(None)
         flake_detection_thread.join()
@@ -216,6 +216,7 @@ class ScanManager:
 
         self.app.set_view("Map", False)
         self.turret_controller.change_objective(2)
+        self.stage.wait_until_not_busy()
 
         if scan_path is None:
             path = HOME_DIR / "Scans" / datetime.now().strftime("10x (%Y-%m-%d) (%H-%M-%S)")

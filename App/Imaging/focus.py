@@ -22,15 +22,34 @@ class FocusController:
         self.stop_focus_event = threading.Event()
         self.focus_running = False
 
-    def start_auto_focus_thread(self, focus_range=1000, z_velo=500, z_accel=10000, peak_found_threshold=100):
+    def _run_on_ui_thread(self, callback, *args):
+        if threading.current_thread() is threading.main_thread():
+            callback(*args)
+        else:
+            self.app.root.after(0, callback, *args)
+
+    def _wait_for_focus_thread(self, focus_thread):
+        if threading.current_thread() is threading.main_thread():
+            while focus_thread.is_alive():
+                self.app.root.update()
+                focus_thread.join(timeout=0.05)
+            self.app.root.update()
+        else:
+            focus_thread.join()
+
+    def start_auto_focus_thread(self, focus_range=1000, z_velo=500, z_accel=10000, peak_found_threshold=100, wait=True):
         if self.focus_thread is not None and self.focus_thread.is_alive():
             print("Autofocus already running")
+
+            if wait:
+                self._wait_for_focus_thread(self.focus_thread)
+
             return
 
         self.stop_focus_event.clear()
         self.focus_running = True
 
-        self.app.root.after(0, self.app.disable_buttons)
+        self._run_on_ui_thread(self.app.disable_buttons)
 
         self.focus_thread = threading.Thread(
             target=self._auto_focus_worker,
@@ -39,6 +58,11 @@ class FocusController:
         )
 
         self.focus_thread.start()
+
+        if wait:
+            self._wait_for_focus_thread(self.focus_thread)
+
+        return self.focus_thread
 
     def _auto_focus_worker(self, focus_range, z_velo, z_accel, peak_found_threshold):
         try:
@@ -51,14 +75,14 @@ class FocusController:
 
         finally:
             self.focus_running = False
-            self.app.root.after(0, self.app.enable_buttons)
+            self._run_on_ui_thread(self.app.enable_buttons)
 
     def stop_auto_focus(self):
         self.stop_focus_event.set()
 
     def get_latest_frame(self):
         if len(self.frame_processor.frame_buffer) == 0:
-            return None, None
+            return None, None, None
 
         data = self.frame_processor.frame_buffer[-1]
 
@@ -72,7 +96,7 @@ class FocusController:
         start_time = time.perf_counter()
 
         if image is None:
-            return 0
+            return 0, 0
 
         h, w = image.shape[:2]
 
@@ -99,7 +123,7 @@ class FocusController:
         lap = cv2.Laplacian(gray, cv2.CV_32F, ksize=3)
         sharpness = float(np.mean(lap * lap))
 
-        self.sharpness_callback(sharpness)
+        self._run_on_ui_thread(self.sharpness_callback, sharpness)
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
 
@@ -136,6 +160,11 @@ class FocusController:
             is_not_busy_check = 0
 
             while is_not_busy_check < 10:
+
+                if self.stop_focus_event.is_set():
+                    self.stage.stop_z()
+                    self.stage.wait_until_not_busy()
+                    break
 
                 if self.stage.is_busy():
                     is_not_busy_check = 0
@@ -189,16 +218,20 @@ class FocusController:
         if not peak_found:
 
             if self.stop_focus_event.is_set():
+                self.stage.set_z_velocity(default_z_velo)
+                self.stage.set_z_acceleration(default_z_accel)
                 return current_z
 
             self.stage.move_to_z(z_end, wait=False)
 
             peak_found, best_sharpness, best_z = find_peak(peak_found_threshold)
 
-        if best_sharpness < 0:
+        if best_sharpness is None or best_z is None or best_sharpness < 0:
             print("No valid focus frames found")
             self.stage.move_to_z(current_z)
             self.stage.wait_until_not_busy()
+            self.stage.set_z_velocity(default_z_velo)
+            self.stage.set_z_acceleration(default_z_accel)
             return current_z
 
         time_taken = (time.perf_counter() - start_time)

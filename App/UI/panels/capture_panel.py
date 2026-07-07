@@ -19,7 +19,7 @@ class CapturePanel:
             self.parent,
             bg="#f0f0f0",
             width=204,
-            height=120
+            height=155
         )
         frame.place(relx=1.0, rely=0.0, anchor="ne")
 
@@ -27,7 +27,7 @@ class CapturePanel:
             frame,
             bg="white",
             width=200,
-            height=118
+            height=153
         )
         background.place(x=2, y=0)
 
@@ -62,9 +62,23 @@ class CapturePanel:
         self.capture_map_button.place(relx=0.5, y=90, anchor="center")
         self.app.register_button(self.capture_map_button)
 
+        self.capture_filter_map_button = ttk.Button(
+            background,
+            text="Save Filter Map",
+            style="Save.TButton",
+            command=self.save_filter_map
+        )
+        self.capture_filter_map_button.place(relx=0.5, y=125, anchor="center")
+        self.app.register_button(self.capture_filter_map_button)
+
         return frame
 
     def save_map(self):
         true_map = self.app.get_true_map()
         true_map_bgr = cv2.cvtColor(true_map, cv2.COLOR_RGB2BGR)
         self.save_image(image=true_map_bgr)
+
+    def save_filter_map(self):
+        filter_map = self.app.get_filter_map()
+        filter_map_bgr = cv2.cvtColor(filter_map, cv2.COLOR_RGB2BGR)
+        self.save_image(image=filter_map_bgr)
