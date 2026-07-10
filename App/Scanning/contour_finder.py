@@ -4,6 +4,86 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tkinter import filedialog
 
+def _perimeter_point(distance, width, height):
+    top_len = width - 1
+    right_len = height - 1
+    bottom_len = width - 1
+    perimeter = 2 * (top_len + right_len)
+    distance %= perimeter
+
+    if distance <= top_len:
+        return distance, 0
+
+    distance -= top_len
+    if distance <= right_len:
+        return width - 1, distance
+
+    distance -= right_len
+    if distance <= bottom_len:
+        return width - 1 - distance, height - 1
+
+    distance -= bottom_len
+    return 0, height - 1 - distance
+
+def _close_border_touching_edges(edge_mask, border_width=3):
+    height, width = edge_mask.shape
+
+    if height < 2 or width < 2:
+        return edge_mask
+
+    closed = edge_mask.copy()
+    _, labels = cv2.connectedComponents(edge_mask, connectivity=8)
+    perimeter = 2 * ((width - 1) + (height - 1))
+    border_width = max(1, min(border_width, height, width))
+    border_distances_by_label = {}
+
+    def add_distances(label_values, distances):
+        for label, distance in zip(label_values, distances):
+            if label == 0:
+                continue
+
+            border_distances_by_label.setdefault(int(label), set()).add(int(distance) % perimeter)
+
+    ys, xs = np.nonzero(labels[:border_width, :])
+    add_distances(labels[ys, xs], xs)
+
+    ys, xs = np.nonzero(labels[:, width - border_width:])
+    add_distances(labels[ys, width - border_width + xs], width - 1 + ys)
+
+    ys, xs = np.nonzero(labels[height - border_width:, :])
+    actual_ys = height - border_width + ys
+    add_distances(
+        labels[actual_ys, xs],
+        width - 1 + height - 1 + width - 1 - xs,
+    )
+
+    ys, xs = np.nonzero(labels[:, :border_width])
+    add_distances(
+        labels[ys, xs],
+        width - 1 + height - 1 + width - 1 + height - 1 - ys,
+    )
+
+    for border_distances in border_distances_by_label.values():
+        border_distances = sorted(border_distances)
+
+        if len(border_distances) < 2:
+            continue
+
+        gaps = []
+        for i, distance in enumerate(border_distances):
+            next_distance = border_distances[(i + 1) % len(border_distances)]
+            gap = (next_distance - distance) % perimeter
+            gaps.append((gap, distance, next_distance))
+
+        _, gap_start, gap_end = max(gaps, key=lambda item: item[0])
+        arc_length = (gap_start - gap_end) % perimeter
+
+        for offset in range(arc_length + 1):
+            x, y = _perimeter_point(gap_end + offset, width, height)
+            closed[y, x] = 255
+
+    return closed
+
 def find_flakes(image_bgr, edge_threshold=10, area_threshold=500, display=False):
 
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
@@ -25,7 +105,8 @@ def find_flakes(image_bgr, edge_threshold=10, area_threshold=500, display=False)
 
     kernel = np.ones((3, 3), np.uint8)
     cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
-    contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    closed_edges = _close_border_touching_edges(cleaned)
+    contours, _ = cv2.findContours(closed_edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     area_filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) >= area_threshold]
     
@@ -40,7 +121,7 @@ def find_flakes(image_bgr, edge_threshold=10, area_threshold=500, display=False)
         axs[0, 0].imshow(image_rgb)
         axs[0, 0].set_title("Original")
         
-        axs[0, 1].imshow(cleaned, cmap='gray')
+        axs[0, 1].imshow(closed_edges, cmap='gray')
         axs[0, 1].set_title("Edges")
         
         axs[1, 0].imshow(contour_img)

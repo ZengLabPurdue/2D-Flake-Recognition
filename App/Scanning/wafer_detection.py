@@ -1,3 +1,4 @@
+import os
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
@@ -98,10 +99,41 @@ def find_wafers(filter_map, true_map):
     return wafers, true_map
 
 if __name__ == "__main__":
-    image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
-    image = cv2.imread(image_path, cv2.IMREAD_COLOR)
-    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    folder_path = filedialog.askdirectory(title="Select Image Folder")
+    extensions = (".png", ".jpg", ".jpeg", ".bmp")
 
-    plt.imshow(cv2.cvtColor(wafer_filter(image, display=True), cv2.COLOR_GRAY2RGB))
-    plt.axis("off")
-    plt.show()
+    if not folder_path:
+        raise RuntimeError("No folder selected.")
+
+    image_filenames = [
+        filename for filename in sorted(os.listdir(folder_path))
+        if filename.lower().endswith(extensions)
+    ]
+
+    if not image_filenames:
+        raise FileNotFoundError(f"No images found in folder: {folder_path}")
+
+    for index, filename in enumerate(image_filenames, start=1):
+        image_path = os.path.join(folder_path, filename)
+        image = cv2.imread(image_path, cv2.IMREAD_COLOR)
+
+        if image is None:
+            print(f"Skipping unreadable image: {image_path}")
+            continue
+
+        print(f"Processing {index}/{len(image_filenames)}: {filename}")
+        filtered = wafer_filter(image, display=False)
+
+        fig, axs = plt.subplots(1, 2, figsize=(14, 7))
+        fig.suptitle(filename)
+
+        axs[0].imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        axs[0].set_title("Original")
+        axs[0].axis("off")
+
+        axs[1].imshow(filtered, cmap="gray")
+        axs[1].set_title("Wafer Filter")
+        axs[1].axis("off")
+
+        plt.tight_layout()
+        plt.show()

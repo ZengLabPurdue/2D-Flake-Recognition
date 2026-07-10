@@ -238,7 +238,6 @@ class App:
         map_menu = Menu(menu_bar, tearoff=0)
         map_menu.add_radiobutton(label="Live Map 2x", variable=self.live_mapping_var, value=True, command=lambda: self.mapper.set_live_map_2x())
         map_menu.add_command(label="Auto Map 2x", command=self.mapper.auto_map_2x)
-        map_menu.add_command(label="Capture Area", command=self.mapper.capture_area)
         menu_bar.add_cascade(label="Map", menu=map_menu)
 
         scan_menu = Menu(menu_bar, tearoff=0)

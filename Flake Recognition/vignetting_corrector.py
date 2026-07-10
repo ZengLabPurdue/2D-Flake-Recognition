@@ -198,4 +198,4 @@ if __name__ == "__main__":
 
     corrected_image_gray = cv2.cvtColor(corrected_image, cv2.COLOR_RGB2GRAY)
     DataVisualizer.surface_graphing(corrected_image_gray)
-    Util.save_image(cv2.cvtColor(corrected_image, cv2.COLOR_RGB2BGR), "corrected_image.png")
+    cv2.imwrite("corrected_image.png", corrected_image)

@@ -115,21 +115,8 @@ class Mapper:
                 map_x = self.last_live_map_x + int(round(shift_x))
                 map_y = self.last_live_map_y + int(round(shift_y))
 
-                '''
-                MIN_ORB_SCORE = 0.25
-                MAX_REASONABLE_SHIFT = 250
+                # Add shift check here
 
-                if (
-                    score > MIN_ORB_SCORE
-                    and abs(shift_x) < MAX_REASONABLE_SHIFT
-                    and abs(shift_y) < MAX_REASONABLE_SHIFT
-                ):
-                    map_x = self.last_live_map_x + int(round(shift_x))
-                    map_y = self.last_live_map_y + int(round(shift_y))
-                else:
-                    print("ORB/RANSAC score too low or shift too large, using stage-based map position")
-                '''
-                    
             except Exception as e:
                 print("Error during ORB/RANSAC shift correction:", e)
 
@@ -359,6 +346,8 @@ class Mapper:
 
                 filter_img = wafer_detection.wafer_filter(img, display=False)
 
+                self.frame_processor.save_image(image=img, filename=f"mapper_output_{i}.png")
+
                 self.place_frame_on_map(img, zoom=zoom, filter_img=filter_img)
 
                 progress_percent = f"{i}/{total_frames}"
@@ -375,40 +364,3 @@ class Mapper:
             self.app.set_live_mapping(False)
             self.app.set_view("Map", False)
             print("Auto mapping finished!")
-
-    def capture_area(self, window=(7, 7), zoom=4):
-
-        self.app.open_panel("Status Panel")
-
-        #self.turret_controller.change_objective(1)
-
-        coords, total_frames = generate_rect_coords(window[1], window[0])
-
-        i = 0
-
-        print(coords)
-
-        for offset_x, offset_y in coords:
-
-            target_x = offset_x * 200
-            target_y = -offset_y * 200
-
-            self.stage.move_to_xy(target_x, target_y)
-            self.stage.wait_until_not_busy()
-
-            img = self.frame_processor.capture_frame_raw()
-
-            self.frame_processor.save_image(image=img, filename=f"flatfield_2x_low_{i}.png")
-
-            i += 1
-
-            progress_percent = f"{i}/{total_frames}"
-
-            self.update_scan_status(
-                scan_type="Live Mapping",
-                stage="Mapping",
-                progress=progress_percent
-            )
-
-
-        print("Live mapping finished!")
