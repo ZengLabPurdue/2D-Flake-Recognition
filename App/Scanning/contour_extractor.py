@@ -44,6 +44,18 @@ def get_region_from_point(
     min_area=5,
 ):
 
+    if image_bgr is None or image_bgr.ndim != 3 or image_bgr.shape[2] != 3:
+        raise ValueError("A three-channel BGR image is required.")
+    if connectivity not in (4, 8):
+        raise ValueError("Connectivity must be 4 or 8.")
+    if not 0 <= threshold <= 255:
+        raise ValueError("Threshold must be between 0 and 255.")
+
+    seed_x, seed_y = seed_point
+    image_height, image_width = image_bgr.shape[:2]
+    if not (0 <= seed_x < image_width and 0 <= seed_y < image_height):
+        raise ValueError("The seed point is outside the image.")
+
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
 
     h, w = gray.shape
@@ -150,4 +162,3 @@ if __name__ == "__main__":
     cv2.imshow("Selected Region", overlay)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
-    

@@ -13,6 +13,7 @@ from config import CROP_RATIO, RESOLUTION_DISPLAY
 
 from Mapping.mapper import Mapper
 from Scanning.scan_manager import ScanManager
+from Scanning.scan_profile import ScanProfileStore
 from Hardware.stage_api import stage
 from Hardware.turret_controller import TurretController
 from UI.panels.info_panel import InfoPanel
@@ -21,6 +22,7 @@ from UI.panels.objective_control_panel import ObjectiveControlPanel
 from UI.panels.focus_panel import FocusPanel
 from UI.panels.scan_status_panel import ScanStatusPanel
 from UI.panels.view_scans_panel import ViewScansPanel
+from UI.panels.scan_profile_panel import ScanProfilePanel
 from UI.panels.capture_panel import CapturePanel
 from UI.panels.camera_settings_panel import CameraSettingsPanel
 from Imaging.frame_processing import FrameProcessor
@@ -54,12 +56,15 @@ class App:
         self.hcam = None
         self.width = 0
         self.height = 0
+        self._displayed_image_bounds = None
         
         self.magnification = "2X"
         self.resolution = "HIGH"
 
         self.buttons = []
         self.panels = []
+        self.scan_profile_store = ScanProfileStore()
+        self.active_scan_profile = None
 
         self.stage = stage(PRIOR_COM_PORT, DLL_PATH)
         
@@ -147,6 +152,13 @@ class App:
             parent=self.main_frame,
             root=self.root,
             app=self,
+        )
+
+        self.scan_profile_panel = ScanProfilePanel(
+            parent=self.main_frame,
+            root=self.root,
+            app=self,
+            profile_store=self.scan_profile_store,
         )
 
         self.focus_controller.sharpness_callback = self.focus_panel.update_sharpness
@@ -247,6 +259,8 @@ class App:
         scan_menu.add_command(label="Run 10x Scan", command=self.scan_manager.run_10x_scan)
         scan_menu.add_command(label="Run 20x Scan", command=self.scan_manager.run_20x_scan)
         scan_menu.add_command(label="Create Vignette Filter", command=self.scan_manager.create_vignette_filter)
+        scan_menu.add_command(label="Create Scan Search Profile", command=self.scan_profile_panel.start_create)
+        scan_menu.add_command(label="Load Scan Search Profile", command=self.scan_profile_panel.choose_and_load_profile)
         menu_bar.add_cascade(label="Scan", menu=scan_menu)
 
         self.view_scans_panel.add_to_menu(menu_bar)
@@ -354,9 +368,30 @@ class App:
         y_offset = (lbl_h - img_pil_copy.height) // 2
         display_img.paste(img_pil_copy, (x_offset, y_offset))
 
+        self._displayed_image_bounds = (
+            x_offset,
+            y_offset,
+            img_pil_copy.width,
+            img_pil_copy.height,
+            w,
+            h,
+        )
+
         img_tk = ImageTk.PhotoImage(display_img)
-        self.img_label.configure(image=img_tk)
+        self.img_label.configure(image=img_tk, text="")
         self.img_label.image = img_tk
+
+    def display_image_message(self, message):
+        """Clear the current image and show a centered instruction instead."""
+        self._displayed_image_bounds = None
+        self.img_label.configure(
+            image="",
+            text=message,
+            fg="#555555",
+            font=("TkDefaultFont", 14),
+            anchor="center",
+        )
+        self.img_label.image = None
 
     # ------------- Util Functions -------------
 
@@ -419,7 +454,24 @@ class App:
     def get_view(self):
         return self.view_mode
 
-    def set_view(self, mode, filter_status):
+    def display_to_image_point(self, display_x, display_y):
+        """Map a click in ``img_label`` back to the current source image."""
+        if self._displayed_image_bounds is None:
+            return None
+
+        x_offset, y_offset, display_width, display_height, image_width, image_height = (
+            self._displayed_image_bounds
+        )
+        relative_x = display_x - x_offset
+        relative_y = display_y - y_offset
+        if not (0 <= relative_x < display_width and 0 <= relative_y < display_height):
+            return None
+
+        image_x = min(image_width - 1, int(relative_x * image_width / display_width))
+        image_y = min(image_height - 1, int(relative_y * image_height / display_height))
+        return image_x, image_y
+
+    def set_view(self, mode, filter_status=False):
         self.view_mode = mode
 
         self.filter_var.set(filter_status)
@@ -432,6 +484,9 @@ class App:
         elif mode == "Camera View":
             self.img_label.pack(fill=BOTH, expand=True)
             self.map_canvas.pack_forget() # Hide map canvas
+        elif mode == "Create Search Profile" or mode == "Load Search Profile":
+            self.img_label.pack(fill=BOTH, expand=True)
+            self.map_canvas.pack_forget()
         elif mode == "Scan Results":
             self.img_label.pack(fill=BOTH, expand=True)
             self.map_canvas.pack_forget() # Hide map canvas
@@ -473,6 +528,13 @@ class App:
     
     def set_filter_map(self, filter_map):
         self.filter_map = filter_map
+
+    def set_active_scan_profile(self, profile):
+        self.active_scan_profile = profile
+        self.scan_profile_store.active_profile = profile
+
+    def get_active_scan_profile(self):
+        return self.active_scan_profile
 
 if __name__ == "__main__":
     root = Tk()

@@ -30,16 +30,16 @@ class ViewScansPanel:
         self.frame.place_forget()
 
     def _build_panel(self):
-        self.pos_scan_name = 40
-        self.pos_chip = 70
-        self.pos_image = 100
-        self.pos_buttons = 140
+        self.pos_scan_name = 50
+        self.pos_chip = 85
+        self.pos_image = 125
+        self.pos_buttons = 160
 
         self.frame = Frame(
             self.parent,
             bg="#f0f0f0",
             width=204,
-            height=205
+            height=225
         )
         self.frame.place(relx=0.0, rely=0.0, anchor="nw")
 
@@ -47,7 +47,7 @@ class ViewScansPanel:
             self.frame,
             bg="white",
             width=200,
-            height=203
+            height=223
         )
         self.background.place(x=2, y=0)
 
@@ -58,7 +58,7 @@ class ViewScansPanel:
             fg="black",
             font=("TkDefaultFont", 13)
         )
-        title.place(relx=0.5, y=5, anchor="n")
+        title.place(relx=0.5, y=10, anchor="n")
 
         self.scan_name_var = tk.StringVar(value="Scan: Not Selected")
 
@@ -162,13 +162,15 @@ class ViewScansPanel:
         menu_bar.add_cascade(label="Results", menu=self.results_menu)
 
     def show(self):
+        if hasattr(self.app, "scan_profile_panel"):
+            self.app.scan_profile_panel.hide()
         self.frame.place(relx=0.0, rely=0.0, anchor="nw")
 
     def hide(self):
         self.frame.place_forget()
 
     def display_chip_dropdown(self, display=True):
-        shift = 0 if display else -30
+        shift = 0 if display else -40
 
         if display:
             self.chip_dropdown.place(relx=0.5, y=self.pos_chip, anchor="n")
@@ -178,7 +180,7 @@ class ViewScansPanel:
         self.image_label.place(relx=0.5, y=self.pos_image + shift, anchor="n")
         self.button_panel.place(relx=0.5, y=self.pos_buttons + shift, anchor="n")
 
-        base_height = 205
+        base_height = 225
         new_height = base_height + shift
 
         self.frame.config(height=new_height)
@@ -221,7 +223,7 @@ class ViewScansPanel:
             )
             return
 
-        self.app.set_view("Scan Results", False)
+        self.app.set_view("Scan Results")
         self.show()
 
         self.view_chip_index = 0

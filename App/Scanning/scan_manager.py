@@ -214,7 +214,7 @@ class ScanManager:
 
         start_time = time.time()
 
-        self.app.set_view("Map", False)
+        self.app.set_view("Map")
         self.turret_controller.change_objective(2)
         self.stage.wait_until_not_busy()
 
@@ -342,7 +342,7 @@ class ScanManager:
 
         start_time = time.time()
 
-        self.app.set_view("Map", False)
+        self.app.set_view("Map")
         self.turret_controller.change_objective(2)
         self.turret_controller.change_objective(3)
 

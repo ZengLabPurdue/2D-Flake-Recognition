@@ -6,3 +6,6 @@ App/Scans/
 
 # Ignore saved images
 App/Saved Images/
+
+# Ignore user-created scan search profiles
+App/Profiles/
