@@ -266,7 +266,11 @@ class ScanManager:
 
                 image_path.parent.mkdir(parents=True, exist_ok=True)
 
-                self.frame_processor.save_image(image=img, filename=image_path)
+                self.frame_processor.save_image(
+                    image=img,
+                    filename=image_path,
+                    vignette_applied=True,
+                )
 
                 if image_queue is not None:
                     image_queue.put(image_path)
@@ -386,7 +390,11 @@ class ScanManager:
 
                 image_path.parent.mkdir(parents=True, exist_ok=True)
 
-                self.frame_processor.save_image(image=img, filename=image_path)
+                self.frame_processor.save_image(
+                    image=img,
+                    filename=image_path,
+                    vignette_applied=True,
+                )
 
                 if image_queue is not None:
                     image_queue.put(image_path)

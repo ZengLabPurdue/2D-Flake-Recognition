@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 from config import HOME_DIR
+from Imaging import image_metadata
 from .contour_extractor import get_region_from_point
 
 
@@ -39,10 +40,14 @@ def _read_image(path):
 
 
 def _write_image(path, image):
-    success, data = cv2.imencode(".png", image)
-    if not success:
-        raise ScanProfileError(f"Could not encode profile image: {path.name}")
-    path.write_bytes(data.tobytes())
+    image_metadata.save_png(
+        path,
+        image,
+        metadata={
+            "vignette_applied": True,
+            "source": "scan_profile",
+        },
+    )
 
 
 def build_region_overlay(image_bgr, region_mask, seed_point):
@@ -252,6 +257,10 @@ class ScanProfile:
                 saved_class.get("source_image"),
                 index,
             )
+            if not image_metadata.is_vignette_corrected(source_path):
+                raise ScanProfileError(
+                    f"Class {class_name} does not use a vignette-corrected PNG image."
+                )
             image = _read_image(source_path)
             if image is None:
                 raise ScanProfileError(f"Could not read source image for class {class_name}.")

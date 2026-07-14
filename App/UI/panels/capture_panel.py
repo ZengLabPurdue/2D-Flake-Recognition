@@ -1,5 +1,4 @@
 import cv2
-import numpy as np
 import tkinter as tk
 from tkinter import Frame, Label, messagebox
 from tkinter import ttk
@@ -17,6 +16,7 @@ class CapturePanel:
         self.save_image = save_image
         self.crop_image_var = tk.BooleanVar(value=True)
         self.vignette_image_var = tk.BooleanVar(value=False)
+        self.filter_image_var = tk.BooleanVar(value=False)
         self.frame = self._build_panel()
 
     def _build_panel(self):
@@ -24,7 +24,7 @@ class CapturePanel:
             self.parent,
             bg="#f0f0f0",
             width=204,
-            height=220
+            height=215
         )
         frame.place(relx=1.0, rely=0.0, anchor="ne")
 
@@ -32,7 +32,7 @@ class CapturePanel:
             frame,
             bg="white",
             width=200,
-            height=218
+            height=213
         )
         background.place(x=2, y=0)
 
@@ -85,14 +85,13 @@ class CapturePanel:
         self.capture_map_button.place(relx=0.5, y=150, anchor="center")
         self.app.register_button(self.capture_map_button)
 
-        self.capture_filter_map_button = ttk.Button(
+        self.filter_image_checkbox = ttk.Checkbutton(
             background,
-            text="Save Filter Map",
-            style="Save.TButton",
-            command=self.save_filter_map
+            text="Apply chip filter",
+            variable=self.filter_image_var,
+            style="Capture.TCheckbutton",
         )
-        self.capture_filter_map_button.place(relx=0.5, y=190, anchor="center")
-        self.app.register_button(self.capture_filter_map_button)
+        self.filter_image_checkbox.place(relx=0.5, y=185, anchor="center")
 
         return frame
 
@@ -130,6 +129,7 @@ class CapturePanel:
             "Image",
             crop=self.crop_image_var.get(),
             apply_vignette=self.vignette_image_var.get(),
+            apply_chip_filter=self.filter_image_var.get(),
         )
 
     def save_map(self):
@@ -145,23 +145,3 @@ class CapturePanel:
             return None
 
         return self._save_with_notification("Map", image=true_map_bgr)
-
-    def save_filter_map(self):
-        try:
-            filter_map = np.asarray(self.app.get_filter_map()).astype(
-                np.uint8,
-                copy=False,
-            )
-            filter_map_bgr = cv2.cvtColor(filter_map, cv2.COLOR_GRAY2BGR)
-        except Exception as exc:
-            messagebox.showerror(
-                "Save Filter Map Error",
-                f"Could not prepare the filter map for saving:\n\n{exc}",
-                parent=self.parent,
-            )
-            return None
-
-        return self._save_with_notification(
-            "Filter Map",
-            image=filter_map_bgr,
-        )

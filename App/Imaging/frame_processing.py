@@ -11,6 +11,7 @@ from config import HOME_DIR, CROP_RATIO, RESOLUTION, PROCESS_FRAME_RATE
 
 from . import amcam
 from . import chip_edge_classifier
+from . import image_metadata
 from . import vignetting_corrector
 
 class FrameProcessor:
@@ -407,6 +408,8 @@ class FrameProcessor:
         output=False,
         crop=False,
         apply_vignette=False,
+        apply_chip_filter=False,
+        vignette_applied=None,
     ):
         if image is None:
             image = self.capture_frame_raw()
@@ -419,6 +422,11 @@ class FrameProcessor:
             image = self.apply_vignette_filter(image)
         if crop:
             image = self.crop_frame(image)
+        if apply_chip_filter:
+            image = chip_edge_classifier.chip_filter(image)
+
+        if vignette_applied is None:
+            vignette_applied = apply_vignette
 
         if save_dir is None:
             save_dir = HOME_DIR / "Saved Images"
@@ -433,7 +441,18 @@ class FrameProcessor:
         else:
             filepath = save_dir / filename
 
-        if not cv2.imwrite(str(filepath), image):
+        if filepath.suffix.lower() == ".png":
+            image_metadata.save_png(
+                filepath,
+                image,
+                metadata={
+                    "vignette_applied": bool(vignette_applied),
+                    "chip_filter_applied": bool(apply_chip_filter),
+                    "magnification": self.app.get_magnification(),
+                    "resolution": self.app.get_resolution(),
+                },
+            )
+        elif not cv2.imwrite(str(filepath), image):
             raise OSError(f"OpenCV could not write the image to {filepath}")
 
         if output:

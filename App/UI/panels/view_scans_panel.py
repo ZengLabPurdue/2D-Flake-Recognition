@@ -119,8 +119,8 @@ class ViewScansPanel:
         self.btn_previous.grid(row=0, column=0, sticky="nsew")
         self.btn_next.grid(row=0, column=1, sticky="nsew")
 
-    def add_to_menu(self, menu_bar):
-        self.results_menu = tk.Menu(menu_bar, tearoff=0)
+    def add_to_menu(self, parent_menu):
+        self.results_menu = tk.Menu(parent_menu, tearoff=0)
 
         self.results_menu.add_command(
             label="Open Scan...",
@@ -159,7 +159,7 @@ class ViewScansPanel:
             command=None
         )
 
-        menu_bar.add_cascade(label="Results", menu=self.results_menu)
+        parent_menu.add_cascade(label="Results", menu=self.results_menu)
 
     def show(self):
         self.app.close_all_panels()

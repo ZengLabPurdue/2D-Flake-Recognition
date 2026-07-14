@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import Frame, Label, filedialog, messagebox
 from tkinter import ttk
 
+from Imaging import image_metadata
 from Scanning.contour_extractor import get_region_from_point
 from Scanning.scan_profile import (
     ScanProfile,
@@ -16,7 +17,7 @@ from Scanning.scan_profile import (
 
 class ScanProfilePanel:
 
-    IMAGE_TYPES = [("Images", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff")]
+    IMAGE_TYPES = [("Vignette-corrected PNG", "*.png")]
 
     def __init__(self, parent, root, app, scan_profile: ScanProfile):
         self.parent = parent
@@ -370,6 +371,12 @@ class ScanProfilePanel:
             return
 
         source_path = Path(selected)
+        if not image_metadata.is_vignette_corrected(source_path):
+            messagebox.showwarning(
+                "Vignette Correction Required",
+                "Only PNG images saved with vignette correction can be used in scan profiles.",
+            )
+            return
         try:
             encoded = np.frombuffer(source_path.read_bytes(), dtype=np.uint8)
             image_bgr = cv2.imdecode(encoded, cv2.IMREAD_COLOR)

@@ -1,4 +1,5 @@
 import cv2
+from Imaging import image_metadata
 from Scanning.flake_identifier import Flake_Identifier
 
 class Flake_Detector:
@@ -17,10 +18,10 @@ class Flake_Detector:
                 print(img_path)
 
             img = cv2.imread(str(img_path))
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
             if img is None:
                 continue
+            vignette_applied = image_metadata.is_vignette_corrected(img_path)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
             scanned_img, _, save = self.flake_identifier.identify_flakes_flake_model(img)
 
@@ -29,7 +30,8 @@ class Flake_Detector:
             frame_processor.save_image(
                 cv2.cvtColor(scanned_img, cv2.COLOR_RGB2BGR),
                 save_dir=out_path.parent,
-                filename=out_path.name
+                filename=out_path.name,
+                vignette_applied=vignette_applied,
             )
 
             if save:
@@ -42,7 +44,8 @@ class Flake_Detector:
                 frame_processor.save_image(
                     cv2.cvtColor(scanned_img, cv2.COLOR_RGB2BGR),
                     save_dir=flakes_dir,
-                    filename=img_path.name
+                    filename=img_path.name,
+                    vignette_applied=vignette_applied,
                 )
 
             image_queue.task_done()

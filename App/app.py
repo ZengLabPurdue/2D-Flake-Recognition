@@ -229,6 +229,29 @@ class App:
 
         view_menu = Menu(menu_bar, tearoff=0)
 
+        view_menu.add_command(
+            label="Camera View",
+            command=lambda: self.set_view("Camera View"),
+        )
+        view_menu.add_command(
+            label="Map View",
+            command=lambda: self.set_view("Map"),
+        )
+        view_menu.add_separator()
+
+        profile_menu = Menu(view_menu, tearoff=0)
+        profile_menu.add_command(
+            label="Create Profile",
+            command=self.scan_profile_panel.start_create,
+        )
+        profile_menu.add_command(
+            label="Load Profile",
+            command=self.scan_profile_panel.choose_and_load_profile,
+        )
+        view_menu.add_cascade(label="Scan Profiles", menu=profile_menu)
+        self.view_scans_panel.add_to_menu(view_menu)
+        view_menu.add_separator()
+
         map_menu = Menu(view_menu, tearoff=0)
         map_menu.add_checkbutton(
             label="Chip Filter",
@@ -248,8 +271,8 @@ class App:
             command=self.toggle_camera_vignette_filter,
         )
 
-        view_menu.add_cascade(label="Map", menu=map_menu)
-        view_menu.add_cascade(label="Camera View", menu=camera_menu)
+        view_menu.add_cascade(label="Map Filters", menu=map_menu)
+        view_menu.add_cascade(label="Camera Filters", menu=camera_menu)
 
         menu_bar.add_cascade(label="View", menu=view_menu)
 
@@ -276,11 +299,7 @@ class App:
         scan_menu.add_command(label="Run 10x Scan", command=self.scan_manager.run_10x_scan)
         scan_menu.add_command(label="Run 20x Scan", command=self.scan_manager.run_20x_scan)
         scan_menu.add_command(label="Create Vignette Filter", command=self.scan_manager.create_vignette_filter)
-        scan_menu.add_command(label="Create Scan Search Profile", command=self.scan_profile_panel.start_create)
-        scan_menu.add_command(label="Load Scan Search Profile", command=self.scan_profile_panel.choose_and_load_profile)
         menu_bar.add_cascade(label="Scan", menu=scan_menu)
-
-        self.view_scans_panel.add_to_menu(menu_bar)
 
         self.root.config(menu=menu_bar)
 
@@ -497,6 +516,14 @@ class App:
 
     def set_view(self, mode, filter_status=None):
         self.view_mode = mode
+
+        if hasattr(self, "scan_profile_panel") and mode not in (
+            "Create Search Profile",
+            "Load Search Profile",
+        ):
+            self.scan_profile_panel.hide()
+        if hasattr(self, "view_scans_panel") and mode != "Scan Results":
+            self.view_scans_panel.hide()
 
         if filter_status is not None:
             if mode == "Map":
