@@ -57,11 +57,11 @@ class ScanProfilePanel:
             self.parent,
             bg="#f0f0f0",
             width=204,
-            height=605,
+            height=610,
         )
         panel.place(relx=0.0, rely=0.0, anchor="nw")
 
-        background = Frame(panel, bg="white", width=200, height=598)
+        background = Frame(panel, bg="white", width=200, height=608)
         background.place(x=2, y=0)
 
         style = ttk.Style()
