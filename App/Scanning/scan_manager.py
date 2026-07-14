@@ -8,8 +8,8 @@ import numpy as np
 
 from config import HOME_DIR, PIXEL_SIZE, RESOLUTION_DIM, CROP_RATIO
 
+from . import chip_detection
 from . import flake_detection
-from . import wafer_detection
 from . import coordinate_generator
 
 class ScanManager:
@@ -21,6 +21,7 @@ class ScanManager:
         turret_controller,
         camera,
         frame_processor,
+        mapper,
         update_scan_status,
     ):
         self.root = root
@@ -29,6 +30,7 @@ class ScanManager:
         self.turret_controller = turret_controller
         self.camera = camera
         self.frame_processor = frame_processor
+        self.mapper = mapper
         self.update_scan_status = update_scan_status
 
         self.resolution = self.app.get_resolution()
@@ -48,8 +50,17 @@ class ScanManager:
         self.update_scan_status(scan_type="Full Scan")
 
         center_x, center_y, scale_2x = self.run_2x_scan(scan_path=scan_path, full_scan=True, full_scan_start_time=start_time, window=window, full_zoom=True)
-        wafers, true_map = wafer_detection.find_wafers(self.app.get_filter_map(), self.app.get_true_map())
-        print("Wafers found")
+
+        true_map_bgr = cv2.cvtColor(self.app.get_true_map(), cv2.COLOR_RGB2BGR)
+        filter_map = chip_detection.select_and_filter_map(
+            map_image=true_map_bgr,
+            save_path=scan_path / "All Images" / "2x" / "map_2x_filtered.png",
+            display=False,
+        )
+        self.app.set_filter_map(filter_map)
+
+        wafers, true_map = chip_detection.find_chips(filter_map, self.app.get_true_map())
+        print("Scan areas found")
         self.app.set_true_map(true_map)
         print("True map set")
         scan_coordinates = coordinate_generator.generate_10x_scan_coordinates(self.app, wafers, center_x, center_y, scale_2x, self.app.get_true_map(), self.camera.get_Size())
@@ -98,104 +109,22 @@ class ScanManager:
         full_zoom=False,
     ):
         self.app.set_live_mapping(False)
-
         self.app.open_panel("Status Panel")
-
         print("2x scan running...")
-
-        self.turret_controller.change_objective(1)
-        self.app.set_view("Map", True)
-
-        start_time = time.time()
 
         if scan_path is None:
             path = HOME_DIR / "Scans" / datetime.now().strftime("2x (%Y-%m-%d) (%H-%M-%S)")
         else:
             path = scan_path / "All Images" / "2x"
 
-        self.app.set_true_map(np.zeros((6000, 6000, 3), dtype=np.uint8))
-        self.app.set_filter_map(np.zeros((6000, 6000), dtype=np.uint8))
-
-        center_x, center_y, _ = self.stage.get_position()
-
-        coords, total_frames = coordinate_generator.generate_rect_coords(window[1], window[0])
-
-        camera_width, camera_height = self.camera.get_Size()
-
-        zoom = max(zoom, int(camera_height / (self.app.get_true_map().shape[0] / window[1])), int(camera_width / (self.app.get_true_map().shape[1] / window[0])))
-
-        if full_zoom:
-            zoom = max(int(camera_height / (self.app.get_true_map().shape[0] / window[1])), int(camera_width / (self.app.get_true_map().shape[1] / window[0])))
-
-        if full_scan:
-            self.update_scan_status(stage="2x Scan", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
-        else:
-            self.update_scan_status(scan_type="2x Scan", stage="2x Scan", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
-
-        for i, (offset_x, offset_y) in enumerate(coords, start=1):
-            target_x = (center_x + offset_x * PIXEL_SIZE["2X"][self.resolution] * RESOLUTION_DIM[self.resolution]["x"] * CROP_RATIO["2X"]["x"])
-            target_y = (center_y - offset_y * PIXEL_SIZE["2X"][self.resolution] * RESOLUTION_DIM[self.resolution]["y"] * CROP_RATIO["2X"]["y"])
-
-            self.stage.move_to_xy(target_x, target_y)
-            self.stage.wait_until_not_busy()
-
-            img = self.frame_processor.capture_frame()
-            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-            image_path = path / "Raw" / f"img_2x_{i}.png"
-            image_path.parent.mkdir(parents=True, exist_ok=True)
-
-            self.frame_processor.save_image(image=img, filename=image_path)
-
-            binary = wafer_detection.wafer_filter(img, display=False)
-            img_binary_rgb = cv2.cvtColor(binary, cv2.COLOR_GRAY2RGB)
-
-            if self.app.get_view() == "Camera View":
-                if self.app.get_filter():
-                    self.app.display_image(img_binary_rgb)
-                else:
-                    self.app.display_image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-
-            filter_map = self.app.get_filter_map()
-            true_map = self.app.get_true_map()
-
-            map_x = int(filter_map.shape[1] / 2 - (offset_x + 0.5) * img_binary_rgb.shape[1] / zoom)
-            map_y = int(filter_map.shape[0] / 2 + (offset_y - 0.5) * img_binary_rgb.shape[0] / zoom)
-
-            img_small = img_rgb[::zoom, ::zoom]
-            img_binary_small = img_binary_rgb[::zoom, ::zoom, 0]
-
-            x_start = max(0, map_x)
-            y_start = max(0, map_y)
-            x_end = min(filter_map.shape[1], x_start + img_binary_small.shape[1])
-            y_end = min(filter_map.shape[0], y_start + img_binary_small.shape[0])
-
-            true_map[y_start:y_end, x_start:x_end] = img_small[:y_end-y_start, :x_end-x_start]
-
-            filter_map[y_start:y_end, x_start:x_end] = img_binary_small[:y_end-y_start, :x_end-x_start]
-
-            stage_elapsed = time.time() - start_time
-
-            if full_scan_start_time is not None:
-                total_elapsed = time.time() - full_scan_start_time
-                total_elapsed_str = time.strftime("%H:%M:%S", time.gmtime(total_elapsed))
-            else:
-                total_elapsed_str = time.strftime("%H:%M:%S", time.gmtime(stage_elapsed))
-
-            stage_elapsed_str = time.strftime("%H:%M:%S", time.gmtime(stage_elapsed))
-            progress_percent = f"{i}/{total_frames} ({i * 100 // total_frames}%)"
-
-            if full_scan:
-                self.update_scan_status(progress=progress_percent, stage_elapsed_time=stage_elapsed_str, total_elapsed_time=total_elapsed_str)
-            else:
-                self.update_scan_status(progress=progress_percent, stage_elapsed_time=stage_elapsed_str, total_elapsed_time=stage_elapsed_str)
-
-        self.stage.move_to_xy(center_x, center_y)
-
-        print("2x scan imaging finished!")
-        print(f"Time taken: {time.time() - start_time:.2f}s")
-
-        return center_x, center_y, zoom
+        return self.mapper.auto_map_2x(
+            window=window,
+            zoom=zoom,
+            full_zoom=full_zoom,
+            save_dir=path,
+            full_scan=full_scan,
+            full_scan_start_time=full_scan_start_time,
+        )
 
     def run_10x_scan(
         self,

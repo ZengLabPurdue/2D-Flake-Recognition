@@ -1,14 +1,15 @@
-import os
+from pathlib import Path
+
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from tkinter import filedialog
 from scipy.signal import find_peaks
 
-def wafer_filter(image, threshold=None, sample=30, display=False):
+def chip_filter(image, threshold=None, sample=30, display=False):
 
     if image is None or image.ndim != 3 or image.shape[2] < 3:
-        raise ValueError("wafer_filter requires a BGR color image.")
+        raise ValueError("chip_filter requires a BGR color image.")
 
     non_black_mask = np.any(image[:, :, :3] != 0, axis=2)
 
@@ -95,58 +96,75 @@ def threshold_after_highest_peak(hist, smoothing=30, min_prominence=0.05, displa
 
     return threshold
 
-def find_wafers(filter_map, true_map):
+def find_chips(filter_map, true_map):
     binary_map = (filter_map > 0).astype("uint8") * 255
     contours, _ = cv2.findContours(binary_map, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     filtered_contours = [c for c in contours if cv2.contourArea(c) >= 1000]
     
-    wafers = []
+    chips = []
     
     for _, contour in enumerate(filtered_contours):
         x, y, w, h = cv2.boundingRect(contour)
-        wafers.append((x,y,w,h))
+        chips.append((x,y,w,h))
         cv2.rectangle(true_map, (x, y), (x+w, y+h), (255,255,0), 5)
-    return wafers, true_map
+    return chips, true_map
 
-def select_and_filter_map():
-    map_path = filedialog.askopenfilename(
-        title="Select Map Image",
-        filetypes=[
-            ("Image files", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff"),
-            ("All files", "*.*"),
-        ],
-    )
+def select_and_filter_map(map_image=None, save_path=None, display=None):
+    map_path = None
 
-    if not map_path:
-        return None
-
-    map_image = cv2.imread(map_path, cv2.IMREAD_COLOR)
     if map_image is None:
-        raise ValueError(f"Could not read map image: {map_path}")
+        selected_path = filedialog.askopenfilename(
+            title="Select Map Image",
+            filetypes=[
+                ("Image files", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff"),
+                ("All files", "*.*"),
+            ],
+        )
 
-    filtered_map = wafer_filter(map_image, display=False)
+        if not selected_path:
+            return None
 
-    map_name = os.path.splitext(os.path.basename(map_path))[0]
-    save_path = filedialog.asksaveasfilename(
-        title="Save Filtered Map",
-        initialdir=os.path.dirname(map_path),
-        initialfile=f"{map_name}_filtered.png",
-        defaultextension=".png",
-        filetypes=[
-            ("PNG image", "*.png"),
-            ("Bitmap image", "*.bmp"),
-            ("TIFF image", "*.tif *.tiff"),
-        ],
-    )
+        map_path = Path(selected_path)
+        map_image = cv2.imread(str(map_path), cv2.IMREAD_COLOR)
+        if map_image is None:
+            raise ValueError(f"Could not read map image: {map_path}")
+
+        if display is None:
+            display = True
+    elif display is None:
+        display = False
+
+    if map_image.ndim != 3 or map_image.shape[2] < 3:
+        raise ValueError("select_and_filter_map requires a BGR color map.")
+
+    filtered_map = chip_filter(map_image, display=False)
+
+    if map_path is not None and save_path is None:
+        save_path = filedialog.asksaveasfilename(
+            title="Save Filtered Map",
+            initialdir=str(map_path.parent),
+            initialfile=f"{map_path.stem}_filtered.png",
+            defaultextension=".png",
+            filetypes=[
+                ("PNG image", "*.png"),
+                ("Bitmap image", "*.bmp"),
+                ("TIFF image", "*.tif *.tiff"),
+            ],
+        )
 
     if save_path:
-        if not cv2.imwrite(save_path, filtered_map):
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        if not cv2.imwrite(str(save_path), filtered_map):
             raise OSError(f"Could not save filtered map to: {save_path}")
         print(f"Filtered map saved to: {save_path}")
 
+    if not display:
+        return filtered_map
+
     fig, axes = plt.subplots(1, 2, figsize=(14, 7))
-    fig.suptitle(os.path.basename(map_path))
+    fig.suptitle(map_path.name if map_path is not None else "2x Scan Map")
 
     axes[0].imshow(cv2.cvtColor(map_image, cv2.COLOR_BGR2RGB))
     axes[0].set_title("Original Map")

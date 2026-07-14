@@ -113,6 +113,7 @@ class App:
             turret_controller=self.turret_controller,
             camera=self.frame_processor.get_camera(),
             frame_processor=self.frame_processor,
+            mapper=self.mapper,
             update_scan_status=self.scan_status_panel.update_status,
         )
 

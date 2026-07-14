@@ -1,12 +1,11 @@
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
-import tkinter as tk
 
 from config import PIXEL_SIZE, CROP_RATIO, RESOLUTION_DIM
 from Scanning.coordinate_generator import generate_rect_coords
-from Scanning import wafer_detection
 
 class Mapper:
 
@@ -33,6 +32,7 @@ class Mapper:
         self.turret_controller.change_objective(1)
 
         self.app.set_true_map(np.zeros((6000, 6000, 3), dtype=np.uint8))
+        self.app.set_filter_map(np.zeros((6000, 6000), dtype=np.uint8))
 
         self.stage_center_x, self.stage_center_y, _ = self.stage.get_position()
 
@@ -64,6 +64,8 @@ class Mapper:
 
         step = max(1, int(round(zoom)))
         img_rgb = img_rgb[::step, ::step]
+        if filter_img is not None:
+            filter_img = filter_img[::step, ::step]
 
         h, w = img_rgb.shape[:2]
 
@@ -113,10 +115,19 @@ class Mapper:
                 )
                 '''
 
-                map_x = self.last_live_map_x + int(round(shift_x))
-                map_y = self.last_live_map_y + int(round(shift_y))
+                corrected_map_x = self.last_live_map_x + int(round(shift_x))
+                corrected_map_y = self.last_live_map_y + int(round(shift_y))
+                correction_error = np.hypot(
+                    corrected_map_x - map_x,
+                    corrected_map_y - map_y,
+                )
+                correction_limit = max(h, w) * 0.35
 
-                # Add shift check here
+                if score >= 0.25 and num_inliers >= 8 and correction_error <= correction_limit:
+                    map_x = corrected_map_x
+                    map_y = corrected_map_y
+                else:
+                    print("ORB/RANSAC correction rejected; using stage position")
 
             except Exception as e:
                 print("Error during ORB/RANSAC shift correction:", e)
@@ -159,6 +170,7 @@ class Mapper:
         true_map[y0:y1, x0:x1] = crop
         if filter_img is not None:
             filter_map[y0:y1, x0:x1] = filter_crop
+            self.app.set_filter_map(filter_map)
 
         self.app.set_true_map(true_map)
 
@@ -298,63 +310,156 @@ class Mapper:
 
         self.frame_processor.save_image(image=comparison, save_dir=save_dir, filename=filename, output=False)
 
-    def auto_map_2x(self, window=(5, 5), zoom=3, full_zoom=True):
-
-        self.scan_running = True
+    def auto_map_2x(
+        self,
+        window=(5, 5),
+        zoom=3,
+        full_zoom=True,
+        save_dir=None,
+        full_scan=False,
+        full_scan_start_time=None,
+    ):
+        if len(window) != 2 or window[0] < 1 or window[1] < 1:
+            raise ValueError("Mapping window dimensions must both be positive.")
 
         camera_width, camera_height = self.frame_processor.get_camera().get_Size()
-
-        #zoom = max(zoom, int(camera_height / (self.app.get_true_map().shape[0] / window[1])), int(camera_width / (self.app.get_true_map().shape[1] / window[0])))
-
-        #if full_zoom:
-        #    zoom = max(int(camera_height / (self.app.get_true_map().shape[0] / window[1])), int(camera_width / (self.app.get_true_map().shape[1] / window[0])))
+        self.scan_running = True
+        start_time = time.time()
+        center_x = None
+        center_y = None
+        map_height = 6000
+        map_width = 6000
+        cropped_width = int(camera_width * CROP_RATIO["2X"]["x"])
+        cropped_height = int(camera_height * CROP_RATIO["2X"]["y"])
+        minimum_zoom = max(
+            1,
+            int(
+                np.ceil(
+                    cropped_height * (1 + (window[1] - 1) / 2)
+                    / map_height
+                )
+            ),
+            int(
+                np.ceil(
+                    cropped_width * (1 + (window[0] - 1) / 2)
+                    / map_width
+                )
+            ),
+        )
+        zoom = minimum_zoom if full_zoom else max(zoom, minimum_zoom)
 
         try:
             self.app.set_view("Map", True)
-
-            self.stage.set_origin()
-
             self.initialize_2x_mapping()
 
-            coords, total_frames = generate_rect_coords(window[1], window[0])
+            center_x = self.stage_center_x
+            center_y = self.stage_center_y
+            coords, total_frames = generate_rect_coords(window[0], window[1])
+            raw_dir = None
+
+            if save_dir is not None:
+                save_dir = Path(save_dir)
+                raw_dir = save_dir / "Raw"
+                raw_dir.mkdir(parents=True, exist_ok=True)
+
+            if full_scan:
+                self.update_scan_status(
+                    stage="2x Scan",
+                    progress="0%",
+                    stage_elapsed_time="00:00:00",
+                    total_elapsed_time="00:00:00",
+                )
+            else:
+                self.update_scan_status(
+                    scan_type="2x Scan",
+                    stage="2x Scan",
+                    progress="0%",
+                    stage_elapsed_time="00:00:00",
+                    total_elapsed_time="00:00:00",
+                )
 
             print(f"Generated {total_frames} coordinates for mapping: {coords}")
 
             for i, (offset_x, offset_y) in enumerate(coords, start=1):
-
                 resolution = self.app.get_resolution()
-
-                target_x = offset_x * PIXEL_SIZE["2X"][resolution] * RESOLUTION_DIM[resolution]["x"] * CROP_RATIO["2X"]["x"] / 2
-                target_y = -offset_y * PIXEL_SIZE["2X"][resolution] * RESOLUTION_DIM[resolution]["x"] * CROP_RATIO["2X"]["x"] / 2
+                target_x = center_x + (
+                    offset_x
+                    * PIXEL_SIZE["2X"][resolution]
+                    * RESOLUTION_DIM[resolution]["x"]
+                    * CROP_RATIO["2X"]["x"]
+                    / 2
+                )
+                target_y = center_y - (
+                    offset_y
+                    * PIXEL_SIZE["2X"][resolution]
+                    * RESOLUTION_DIM[resolution]["y"]
+                    * CROP_RATIO["2X"]["y"]
+                    / 2
+                )
 
                 self.stage.move_to_xy(target_x, target_y)
-                self.stage.wait_until_not_busy() 
+                self.stage.wait_until_not_busy()
 
                 img = self.frame_processor.capture_frame(num_images=2)
-
-                img = self.frame_processor.apply_vignette_filter(img)
-
                 if img is None:
                     print("No image captured, skipping this tile.")
                     continue
 
-                filter_img = wafer_detection.wafer_filter(img, display=False)
+                img = self.frame_processor.apply_vignette_filter(img)
 
-                #self.frame_processor.save_image(image=img, filename=f"mapper_output_{i}.png")
+                if raw_dir is not None:
+                    self.frame_processor.save_image(
+                        image=img,
+                        save_dir=raw_dir,
+                        filename=f"img_2x_{i}.png",
+                        vignette_applied=True,
+                    )
 
-                self.place_frame_on_map(img, zoom=zoom, filter_img=filter_img)
+                self.place_frame_on_map(img, zoom=zoom)
 
-                progress_percent = f"{i}/{total_frames}"
-
-                self.update_scan_status(scan_type="Auto Map 2x", stage="Mapping", progress=progress_percent)
-
+                stage_elapsed = time.time() - start_time
+                total_elapsed = (
+                    time.time() - full_scan_start_time
+                    if full_scan_start_time is not None
+                    else stage_elapsed
+                )
+                progress = f"{i}/{total_frames} ({i * 100 // total_frames}%)"
+                status = {
+                    "progress": progress,
+                    "stage_elapsed_time": time.strftime(
+                        "%H:%M:%S", time.gmtime(stage_elapsed)
+                    ),
+                    "total_elapsed_time": time.strftime(
+                        "%H:%M:%S", time.gmtime(total_elapsed)
+                    ),
+                }
+                if not full_scan:
+                    status["scan_type"] = "2x Scan"
+                    status["stage"] = "2x Scan"
+                self.update_scan_status(**status)
                 self.root.update()
+
+            if save_dir is not None:
+                map_bgr = cv2.cvtColor(self.app.get_true_map(), cv2.COLOR_RGB2BGR)
+                self.frame_processor.save_image(
+                    image=map_bgr,
+                    save_dir=save_dir,
+                    filename="map_2x.png",
+                    vignette_applied=True,
+                )
+
+            print("2x scan imaging finished!")
+            print(f"Time taken: {time.time() - start_time:.2f}s")
+            return center_x, center_y, zoom
 
         except Exception as ex:
             print("Auto map error:", ex)
+            raise
 
         finally:
-            self.stage.move_to_xy(0, 0)
+            if center_x is not None and center_y is not None:
+                self.stage.move_to_xy(center_x, center_y)
+            self.scan_running = False
             self.app.set_live_mapping(False)
             self.app.set_view("Map", False)
             print("Auto mapping finished!")
