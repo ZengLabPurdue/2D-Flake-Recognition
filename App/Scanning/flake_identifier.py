@@ -2,7 +2,6 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
-import sys
 from pathlib import Path
 
 import time
@@ -22,12 +21,8 @@ from ultralytics import YOLO
 os.environ["YOLO_VERBOSE"] = "False"
 
 home_dir = os.path.dirname(os.path.abspath(__file__))
-#brody_work_path = Path(home_dir) / "Brody's Work"
-flake_reg_path = Path(home_dir) / "Flake Recognition"
 color_model_path = Path(home_dir) / "color_classifier_tf.keras"
 flake_model_path = Path(home_dir) / "flake_classifier_tf.keras"
-#sys.path.insert(0, str(brody_work_path))
-sys.path.insert(0, str(flake_reg_path))
 
 #import single_frame_pipeline
 from Scanning import contour_finder
@@ -47,7 +42,10 @@ class Flake_Identifier():
     # image should be in RGB
     def identify_flakes_color_model(self, image, output=False):
         start_time = time.time()
-        masked_image, contours = contour_finder.find_flakes(image, display=False)
+        masked_image_bgr, contours = contour_finder.find_flakes(
+            cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        )
+        masked_image = cv2.cvtColor(masked_image_bgr, cv2.COLOR_BGR2RGB)
 
         valid_contours = []
         for c in contours:
@@ -270,7 +268,9 @@ class Flake_Identifier():
 
     def find_flakes(self, image, output=False):
 
-        _, contours = contour_finder.find_flakes(image, display=output)
+        _, contours = contour_finder.find_flakes(
+            cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        )
 
         return contours
     

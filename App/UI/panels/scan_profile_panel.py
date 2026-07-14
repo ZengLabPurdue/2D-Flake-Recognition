@@ -8,6 +8,7 @@ from tkinter import ttk
 
 from Imaging import image_metadata
 from Scanning.contour_extractor import get_region_from_point
+from Scanning.contour_finder import find_flakes
 from Scanning.scan_profile import (
     ScanProfile,
     ScanProfileError,
@@ -453,7 +454,7 @@ class ScanProfilePanel:
             target_index = existing_index
 
         try:
-            self.scan_profile.set_class(
+            profile_class = self.scan_profile.set_class(
                 name=class_name,
                 source_path=self.current_source_path,
                 image_bgr=self.current_image_bgr.copy(),
@@ -473,7 +474,13 @@ class ScanProfilePanel:
         self.selected_class_index = None
         self.editing_class_index = None
         self._set_class_editing_enabled(False)
-        self.status_var.set(f"Confirmed {class_name}.")
+        masked_background, _ = find_flakes(self.current_image_bgr)
+        self._display_bgr(masked_background)
+        contrast = profile_class["contrast_rgb"]
+        self.status_var.set(
+            f"Confirmed {class_name}. RGB contrast: {contrast}. "
+            "Showing the masked background."
+        )
 
     def edit_selected_class(self):
         if self.mode not in ("create", "edit"):

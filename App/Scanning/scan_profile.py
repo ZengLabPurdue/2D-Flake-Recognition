@@ -10,11 +10,13 @@ import numpy as np
 
 from config import HOME_DIR
 from Imaging import image_metadata
+from .contour_finder import region_contrast_rgb
 from .contour_extractor import get_region_from_point
 
 
 PROFILE_SCHEMA = "flake-search.scan-search-profile"
-PROFILE_VERSION = 1
+PROFILE_VERSION = 2
+SUPPORTED_PROFILE_VERSIONS = {1, PROFILE_VERSION}
 PROFILE_FILENAME = "profile.json"
 DEFAULT_PROFILES_DIR = HOME_DIR / "Profiles"
 ScanProfileError = ValueError
@@ -170,7 +172,7 @@ class ScanProfile:
                 profile_class["minimum_size_um"],
                 profile_class["maximum_size_um"],
             )
-            red, green, blue = self._average_color(profile_class)
+            red, green, blue = profile_class["contrast_rgb"]
             saved_classes.append({
                 "id": class_id,
                 "name": profile_class["name"],
@@ -188,7 +190,7 @@ class ScanProfile:
                     if minimum is not None or maximum is not None
                     else None
                 ),
-                "average_color_rgb": {"red": red, "green": green, "blue": blue},
+                "contrast_rgb": {"red": red, "green": green, "blue": blue},
             })
 
         now = datetime.now(timezone.utc).isoformat()
@@ -219,7 +221,8 @@ class ScanProfile:
 
         if not isinstance(payload, dict) or payload.get("schema") != PROFILE_SCHEMA:
             raise ScanProfileError("This file is not a scan search profile.")
-        if payload.get("version") != PROFILE_VERSION:
+        profile_version = payload.get("version")
+        if profile_version not in SUPPORTED_PROFILE_VERSIONS:
             raise ScanProfileError(f"Unsupported profile version: {payload.get('version')!r}.")
 
         name = payload.get("name")
@@ -277,11 +280,19 @@ class ScanProfile:
                 if "size_requirement" in saved_class
                 else default_size
             )
-            color = saved_class.get("average_color_rgb")
-            if isinstance(color, dict):
-                color = (color.get("red"), color.get("green"), color.get("blue"))
-            elif color is not None:
-                raise ScanProfileError(f"Class {class_name} has an invalid average RGB color.")
+            contrast = saved_class.get("contrast_rgb")
+            if isinstance(contrast, dict):
+                contrast = (
+                    contrast.get("red"),
+                    contrast.get("green"),
+                    contrast.get("blue"),
+                )
+            elif profile_version == PROFILE_VERSION:
+                raise ScanProfileError(f"Class {class_name} has invalid RGB contrast.")
+            else:
+                # Version 1 stored the absolute region color. Recalculate its
+                # contrast from the source image and the current flake mask.
+                contrast = None
 
             loaded_classes.append(self._make_class(
                 class_name,
@@ -294,7 +305,7 @@ class ScanProfile:
                 size[0],
                 size[1],
                 saved_class.get("id"),
-                color,
+                contrast,
             ))
 
         class_names = [profile_class["name"].casefold() for profile_class in loaded_classes]
@@ -335,7 +346,7 @@ class ScanProfile:
         minimum,
         maximum,
         class_id=None,
-        color=None,
+        contrast=None,
     ):
         minimum, maximum = self.validate_size_requirement(minimum, maximum)
         profile_class = {
@@ -349,24 +360,31 @@ class ScanProfile:
             "connectivity": int(connectivity),
             "minimum_size_um": minimum,
             "maximum_size_um": maximum,
-            "average_color_rgb": color,
+            "contrast_rgb": contrast,
         }
         self._validate_class(profile_class)
-        if color is None:
-            profile_class["average_color_rgb"] = self._average_color(profile_class)
+        if contrast is None:
+            try:
+                profile_class["contrast_rgb"] = region_contrast_rgb(image, region_mask)
+            except ValueError as exc:
+                raise ScanProfileError(
+                    f"Could not determine the background for class {name}."
+                ) from exc
         elif (
-            not isinstance(color, (list, tuple))
-            or len(color) != 3
+            not isinstance(contrast, (list, tuple))
+            or len(contrast) != 3
             or any(
                 isinstance(value, bool)
                 or not isinstance(value, (int, float))
-                or not 0 <= value <= 255
-                for value in color
+                or not -255 <= value <= 255
+                for value in contrast
             )
         ):
-            raise ScanProfileError(f"Class {name} has an invalid average RGB color.")
+            raise ScanProfileError(f"Class {name} has invalid RGB contrast.")
         else:
-            profile_class["average_color_rgb"] = tuple(int(round(value)) for value in color)
+            profile_class["contrast_rgb"] = tuple(
+                int(round(value)) for value in contrast
+            )
         return profile_class
 
     def _validate_class(self, profile_class):
@@ -390,13 +408,6 @@ class ScanProfile:
             raise ScanProfileError(f"Class {name!r} has an invalid seed point.")
         if mask[seed_y, seed_x] == 0:
             raise ScanProfileError(f"Class {name!r} does not contain its seed point.")
-
-    def _average_color(self, profile_class):
-        blue, green, red = np.mean(
-            profile_class["image_bgr"][profile_class["region_mask"] > 0],
-            axis=0,
-        )
-        return int(round(red)), int(round(green)), int(round(blue))
 
     def _region_mask(self, image, seed_point, threshold, connectivity, class_name):
         try:
