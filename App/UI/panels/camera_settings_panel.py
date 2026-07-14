@@ -12,11 +12,27 @@ class CameraSettingsPanel:
         resolution_options=None,
         get_resolution=None,
         change_resolution_callback=None,
+        chip_filter_var=None,
+        vignette_filter_var=None,
+        chip_filter_callback=None,
+        vignette_filter_callback=None,
     ):
         self.parent = parent
         self.get_camera = get_camera
         self.get_resolution = get_resolution
         self.change_resolution_callback = change_resolution_callback
+        self.chip_filter_var = (
+            chip_filter_var
+            if chip_filter_var is not None
+            else tk.BooleanVar(value=False)
+        )
+        self.vignette_filter_var = (
+            vignette_filter_var
+            if vignette_filter_var is not None
+            else tk.BooleanVar(value=False)
+        )
+        self.chip_filter_callback = chip_filter_callback
+        self.vignette_filter_callback = vignette_filter_callback
 
         self.resolution_value_to_label = dict(resolution_options)
         self.resolution_label_to_value = {
@@ -30,7 +46,7 @@ class CameraSettingsPanel:
             self.parent,
             bg="#f0f0f0",
             width=204,
-            height=220,
+            height=310,
         )
         frame.place(relx=1.0, rely=0.0, anchor="ne")
 
@@ -38,7 +54,7 @@ class CameraSettingsPanel:
             frame,
             bg="white",
             width=200,
-            height=218,
+            height=308,
         )
         background.place(x=2, y=0)
 
@@ -140,6 +156,33 @@ class CameraSettingsPanel:
             "<<ComboboxSelected>>",
             self.change_resolution,
         )
+
+        filter_header = Label(
+            background,
+            text="Image Filters",
+            bg="white",
+            fg="black",
+            font=("TkDefaultFont", 10, "bold"),
+        )
+        filter_header.place(relx=0.5, y=220, anchor="n")
+
+        self.chip_filter_checkbox = ttk.Checkbutton(
+            background,
+            text="Chip Filter",
+            variable=self.chip_filter_var,
+            command=self.chip_filter_callback,
+            style="CameraSettings.TCheckbutton",
+        )
+        self.chip_filter_checkbox.place(relx=0.5, y=255, anchor="center")
+
+        self.vignette_filter_checkbox = ttk.Checkbutton(
+            background,
+            text="Vignette Filter",
+            variable=self.vignette_filter_var,
+            command=self.vignette_filter_callback,
+            style="CameraSettings.TCheckbutton",
+        )
+        self.vignette_filter_checkbox.place(relx=0.5, y=282, anchor="center")
 
         return frame
 

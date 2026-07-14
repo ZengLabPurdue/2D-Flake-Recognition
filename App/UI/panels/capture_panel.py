@@ -1,6 +1,9 @@
 import cv2
-from tkinter import Frame, Label
+import numpy as np
+import tkinter as tk
+from tkinter import Frame, Label, messagebox
 from tkinter import ttk
+
 
 class CapturePanel:
     def __init__(
@@ -12,6 +15,8 @@ class CapturePanel:
         self.parent = parent
         self.app = app
         self.save_image = save_image
+        self.crop_image_var = tk.BooleanVar(value=True)
+        self.vignette_image_var = tk.BooleanVar(value=False)
         self.frame = self._build_panel()
 
     def _build_panel(self):
@@ -19,7 +24,7 @@ class CapturePanel:
             self.parent,
             bg="#f0f0f0",
             width=204,
-            height=155
+            height=220
         )
         frame.place(relx=1.0, rely=0.0, anchor="ne")
 
@@ -27,7 +32,7 @@ class CapturePanel:
             frame,
             bg="white",
             width=200,
-            height=153
+            height=218
         )
         background.place(x=2, y=0)
 
@@ -48,10 +53,28 @@ class CapturePanel:
             background,
             text="Save Image",
             style="Save.TButton",
-            command=self.save_image
+            command=self.save_capture_image
         )
         self.capture_image_button.place(relx=0.5, y=55, anchor="center")
         self.app.register_button(self.capture_image_button)
+
+        style.configure("Capture.TCheckbutton", background="white")
+
+        self.crop_image_checkbox = ttk.Checkbutton(
+            background,
+            text="Save cropped image",
+            variable=self.crop_image_var,
+            style="Capture.TCheckbutton",
+        )
+        self.crop_image_checkbox.place(relx=0.5, y=85, anchor="center")
+
+        self.vignette_image_checkbox = ttk.Checkbutton(
+            background,
+            text="Apply vignette filter",
+            variable=self.vignette_image_var,
+            style="Capture.TCheckbutton",
+        )
+        self.vignette_image_checkbox.place(relx=0.5, y=115, anchor="center")
 
         self.capture_map_button = ttk.Button(
             background,
@@ -59,7 +82,7 @@ class CapturePanel:
             style="Save.TButton",
             command=self.save_map
         )
-        self.capture_map_button.place(relx=0.5, y=90, anchor="center")
+        self.capture_map_button.place(relx=0.5, y=150, anchor="center")
         self.app.register_button(self.capture_map_button)
 
         self.capture_filter_map_button = ttk.Button(
@@ -68,17 +91,77 @@ class CapturePanel:
             style="Save.TButton",
             command=self.save_filter_map
         )
-        self.capture_filter_map_button.place(relx=0.5, y=125, anchor="center")
+        self.capture_filter_map_button.place(relx=0.5, y=190, anchor="center")
         self.app.register_button(self.capture_filter_map_button)
 
         return frame
 
+    def _save_with_notification(self, image_name, image=None, **save_options):
+        try:
+            filepath = self.save_image(image=image, **save_options)
+            if filepath is None:
+                raise RuntimeError(
+                    f"No {image_name.lower()} was available to save."
+                )
+        except FileNotFoundError as exc:
+            messagebox.showwarning(
+                "Vignette Filter Unavailable",
+                str(exc),
+                parent=self.parent,
+            )
+            return None
+        except Exception as exc:
+            messagebox.showerror(
+                f"Save {image_name} Error",
+                f"Could not save the {image_name.lower()}:\n\n{exc}",
+                parent=self.parent,
+            )
+            return None
+
+        messagebox.showinfo(
+            f"{image_name} Saved",
+            f"{image_name} saved to:\n{filepath}",
+            parent=self.parent,
+        )
+        return filepath
+
+    def save_capture_image(self):
+        return self._save_with_notification(
+            "Image",
+            crop=self.crop_image_var.get(),
+            apply_vignette=self.vignette_image_var.get(),
+        )
+
     def save_map(self):
-        true_map = self.app.get_true_map()
-        true_map_bgr = cv2.cvtColor(true_map, cv2.COLOR_RGB2BGR)
-        self.save_image(image=true_map_bgr)
+        try:
+            true_map = self.app.get_true_map()
+            true_map_bgr = cv2.cvtColor(true_map, cv2.COLOR_RGB2BGR)
+        except Exception as exc:
+            messagebox.showerror(
+                "Save Map Error",
+                f"Could not prepare the map for saving:\n\n{exc}",
+                parent=self.parent,
+            )
+            return None
+
+        return self._save_with_notification("Map", image=true_map_bgr)
 
     def save_filter_map(self):
-        filter_map = self.app.get_filter_map()
-        filter_map_bgr = cv2.cvtColor(filter_map, cv2.COLOR_RGB2BGR)
-        self.save_image(image=filter_map_bgr)
+        try:
+            filter_map = np.asarray(self.app.get_filter_map()).astype(
+                np.uint8,
+                copy=False,
+            )
+            filter_map_bgr = cv2.cvtColor(filter_map, cv2.COLOR_GRAY2BGR)
+        except Exception as exc:
+            messagebox.showerror(
+                "Save Filter Map Error",
+                f"Could not prepare the filter map for saving:\n\n{exc}",
+                parent=self.parent,
+            )
+            return None
+
+        return self._save_with_notification(
+            "Filter Map",
+            image=filter_map_bgr,
+        )

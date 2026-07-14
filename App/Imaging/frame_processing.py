@@ -11,6 +11,7 @@ from config import HOME_DIR, CROP_RATIO, RESOLUTION, PROCESS_FRAME_RATE
 
 from . import amcam
 from . import chip_edge_classifier
+from . import vignetting_corrector
 
 class FrameProcessor:
     def __init__(
@@ -45,6 +46,10 @@ class FrameProcessor:
         self.camera_fps = 0.0
         self.display_last_time = time.perf_counter()
         self.display_fps = 0.0
+
+        self.vignette_filter_key = None
+        self.vignette_filter = None
+        self.vignette_gain = None
 
     @staticmethod
     def cameraCallback(nEvent, ctx):
@@ -131,10 +136,20 @@ class FrameProcessor:
                     self.place_frame_on_map(cropped, zoom=3)
 
             if self.app.get_view() == "Camera View":
-                if self.app.get_filter():
-                    display = cv2.cvtColor(chip_edge_classifier.chip_filter(img), cv2.COLOR_GRAY2RGB)
+                camera_image = img
+                if self.app.get_camera_vignette_filter():
+                    try:
+                        camera_image = self.apply_vignette_filter(camera_image)
+                    except (FileNotFoundError, ValueError) as exc:
+                        self.app.disable_camera_vignette_filter(str(exc))
+
+                if self.app.get_camera_chip_filter():
+                    display = cv2.cvtColor(
+                        chip_edge_classifier.chip_filter(camera_image),
+                        cv2.COLOR_GRAY2RGB,
+                    )
                 else:
-                    display = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    display = cv2.cvtColor(camera_image, cv2.COLOR_BGR2RGB)
 
                 self.app.display_image(display)
 
@@ -328,13 +343,82 @@ class FrameProcessor:
 
         return frame[y1:y2, x1:x2]
 
-    def save_image(self, image=None, save_dir=None, filename=None, output=False):
+    def get_vignette_filter_path(self):
+        magnification = self.app.get_magnification().lower()
+        resolution = self.app.get_resolution().lower()
+        return HOME_DIR / "Flatfields" / f"vignette_filter_{magnification}_{resolution}.png"
+
+    def load_vignette_filter(self, image_shape=None):
+        key = (self.app.get_magnification(), self.app.get_resolution())
+        if (
+            self.vignette_filter_key != key
+            or self.vignette_filter is None
+            or self.vignette_gain is None
+        ):
+            path = self.get_vignette_filter_path()
+            if not path.is_file():
+                raise FileNotFoundError(
+                    f"No vignette filter is available for {key[0]} at {key[1]} resolution.\n\n"
+                    f"Expected file:\n{path}"
+                )
+            vignette_filter = cv2.imread(str(path), cv2.IMREAD_COLOR)
+            if vignette_filter is None:
+                raise FileNotFoundError(
+                    f"No vignette filter is available for {key[0]} at {key[1]} resolution.\n\n"
+                    f"Expected file:\n{path}"
+                )
+            self.vignette_filter_key = key
+            self.vignette_filter = vignette_filter
+            self.vignette_gain = vignetting_corrector.create_vignette_gain(
+                vignette_filter,
+                reference_point=(
+                    vignette_filter.shape[1] // 2,
+                    vignette_filter.shape[0] // 2,
+                ),
+            )
+
+        vignette_filter = self.vignette_filter
+        if image_shape is not None and vignette_filter.shape != image_shape:
+            cropped_filter = self.crop_frame(vignette_filter)
+            if cropped_filter.shape != image_shape:
+                raise ValueError(
+                    "The vignette filter dimensions do not match the camera image."
+                )
+            vignette_filter = cropped_filter
+        return vignette_filter
+
+    def apply_vignette_filter(self, image):
+        self.load_vignette_filter(image.shape)
+        vignette_gain = self.vignette_gain
+        if vignette_gain.shape != image.shape[:2]:
+            vignette_gain = self.crop_frame(vignette_gain)
+        return vignetting_corrector.apply_vignette_gain(image, vignette_gain)
+
+    def clear_vignette_filter_cache(self):
+        self.vignette_filter_key = None
+        self.vignette_filter = None
+        self.vignette_gain = None
+
+    def save_image(
+        self,
+        image=None,
+        save_dir=None,
+        filename=None,
+        output=False,
+        crop=False,
+        apply_vignette=False,
+    ):
         if image is None:
             image = self.capture_frame_raw()
 
         if image is None:
             print("No image to save.")
             return None
+
+        if apply_vignette:
+            image = self.apply_vignette_filter(image)
+        if crop:
+            image = self.crop_frame(image)
 
         if save_dir is None:
             save_dir = HOME_DIR / "Saved Images"
@@ -349,7 +433,8 @@ class FrameProcessor:
         else:
             filepath = save_dir / filename
 
-        cv2.imwrite(str(filepath), image)
+        if not cv2.imwrite(str(filepath), image):
+            raise OSError(f"OpenCV could not write the image to {filepath}")
 
         if output:
             print(f"Image saved to {filepath}")

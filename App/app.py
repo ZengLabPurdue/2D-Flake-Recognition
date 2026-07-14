@@ -6,14 +6,14 @@ import numpy as np
 
 from tkinter import *
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 from PIL import Image, ImageTk
 
 from config import CROP_RATIO, RESOLUTION_DISPLAY
 
 from Mapping.mapper import Mapper
 from Scanning.scan_manager import ScanManager
-from Scanning.scan_profile import ScanProfileStore
+from Scanning.scan_profile import ScanProfile
 from Hardware.stage_api import stage
 from Hardware.turret_controller import TurretController
 from UI.panels.info_panel import InfoPanel
@@ -43,15 +43,17 @@ class App:
         self.map_canvas.pack(fill=BOTH, expand=True)
 
         self.true_map = np.zeros((6000, 6000, 3), dtype=np.uint8)
-        self.filter_map = np.zeros((6000, 6000), dtype=np.int8)
+        self.filter_map = np.zeros((6000, 6000), dtype=np.uint8)
 
         self.img_label = Label(self.main_frame, bg="#f0f0f0")
         self.img_label.pack(fill=BOTH, expand=True)
 
         self.live_mapping_var = tk.BooleanVar(value=False)
-        self.filter_var = tk.BooleanVar(value=False)
+        self.map_chip_filter_var = tk.BooleanVar(value=False)
+        self.camera_chip_filter_var = tk.BooleanVar(value=False)
+        self.camera_vignette_filter_var = tk.BooleanVar(value=False)
         self.view_mode = None
-        self.set_view("Camera View", False)
+        self.set_view("Camera View")
 
         self.hcam = None
         self.width = 0
@@ -63,7 +65,7 @@ class App:
 
         self.buttons = []
         self.panels = []
-        self.scan_profile_store = ScanProfileStore()
+        self.scan_profile = ScanProfile()
         self.active_scan_profile = None
 
         self.stage = stage(PRIOR_COM_PORT, DLL_PATH)
@@ -140,6 +142,10 @@ class App:
             resolution_options=RESOLUTION_DISPLAY,
             get_resolution=self.get_resolution,
             change_resolution_callback=self.frame_processor.change_resolution,
+            chip_filter_var=self.camera_chip_filter_var,
+            vignette_filter_var=self.camera_vignette_filter_var,
+            chip_filter_callback=lambda: self.set_view("Camera View"),
+            vignette_filter_callback=self.toggle_camera_vignette_filter,
         )
 
         self.focus_panel = FocusPanel(
@@ -158,7 +164,7 @@ class App:
             parent=self.main_frame,
             root=self.root,
             app=self,
-            profile_store=self.scan_profile_store,
+            scan_profile=self.scan_profile,
         )
 
         self.focus_controller.sharpness_callback = self.focus_panel.update_sharpness
@@ -224,12 +230,23 @@ class App:
         view_menu = Menu(menu_bar, tearoff=0)
 
         map_menu = Menu(view_menu, tearoff=0)
-        map_menu.add_radiobutton(label="No Filter", variable=self.filter_var, value=False, command=lambda: self.set_view("Map", False))
-        map_menu.add_radiobutton(label="Filter", variable=self.filter_var, value=True, command=lambda: self.set_view("Map", True))
+        map_menu.add_checkbutton(
+            label="Chip Filter",
+            variable=self.map_chip_filter_var,
+            command=lambda: self.set_view("Map"),
+        )
 
         camera_menu = Menu(view_menu, tearoff=0)
-        camera_menu.add_radiobutton(label="No Filter", variable=self.filter_var, value=False, command=lambda: self.set_view("Camera View", False))
-        camera_menu.add_radiobutton(label="Filter", variable=self.filter_var, value=True, command=lambda: self.set_view("Camera View", True))
+        camera_menu.add_checkbutton(
+            label="Chip Filter",
+            variable=self.camera_chip_filter_var,
+            command=lambda: self.set_view("Camera View"),
+        )
+        camera_menu.add_checkbutton(
+            label="Vignette Filter",
+            variable=self.camera_vignette_filter_var,
+            command=self.toggle_camera_vignette_filter,
+        )
 
         view_menu.add_cascade(label="Map", menu=map_menu)
         view_menu.add_cascade(label="Camera View", menu=camera_menu)
@@ -288,7 +305,7 @@ class App:
     # ------------- Display Functions -------------
 
     def display_map(self):
-        if self.filter_var.get():
+        if self.map_chip_filter_var.get():
             self.map_image = Image.fromarray(self.filter_map.astype(np.uint8))
         else:
             self.map_image = Image.fromarray(self.true_map.astype(np.uint8))
@@ -414,6 +431,13 @@ class App:
 
                 y_position += frame.winfo_height()
 
+    def close_all_panels(self):
+        for panel in self.panels:
+            panel["var"].set(False)
+        self.update_panels()
+        self.view_scans_panel.hide()
+        self.scan_profile_panel.hide()
+
     def open_panel(self, name):
         for panel in self.panels:
             if panel["name"] == name:
@@ -471,10 +495,14 @@ class App:
         image_y = min(image_height - 1, int(relative_y * image_height / display_height))
         return image_x, image_y
 
-    def set_view(self, mode, filter_status=False):
+    def set_view(self, mode, filter_status=None):
         self.view_mode = mode
 
-        self.filter_var.set(filter_status)
+        if filter_status is not None:
+            if mode == "Map":
+                self.map_chip_filter_var.set(filter_status)
+            elif mode == "Camera View":
+                self.camera_chip_filter_var.set(filter_status)
 
         if mode == "Map":
             self.display_map()
@@ -500,10 +528,44 @@ class App:
         self.live_mapping_var.set(live_mapping_status)
 
     def get_filter(self):
-        return self.filter_var.get()
+        if self.view_mode == "Map":
+            return self.get_map_chip_filter()
+        if self.view_mode == "Camera View":
+            return self.get_camera_chip_filter()
+        return False
     
     def set_filter(self, status : bool):
-        self.filter_var.set(status)
+        if self.view_mode == "Map":
+            self.map_chip_filter_var.set(status)
+        elif self.view_mode == "Camera View":
+            self.camera_chip_filter_var.set(status)
+
+    def get_map_chip_filter(self):
+        return self.map_chip_filter_var.get()
+
+    def get_camera_chip_filter(self):
+        return self.camera_chip_filter_var.get()
+
+    def get_camera_vignette_filter(self):
+        return self.camera_vignette_filter_var.get()
+
+    def toggle_camera_vignette_filter(self):
+        if self.camera_vignette_filter_var.get():
+            try:
+                self.frame_processor.load_vignette_filter()
+            except (FileNotFoundError, ValueError) as exc:
+                self.disable_camera_vignette_filter(str(exc))
+                return
+        self.set_view("Camera View")
+
+    def disable_camera_vignette_filter(self, message=None):
+        self.camera_vignette_filter_var.set(False)
+        if message:
+            messagebox.showwarning(
+                "Vignette Filter Unavailable",
+                message,
+                parent=self.root,
+            )
 
     def get_magnification(self):
         return self.magnification
@@ -531,7 +593,6 @@ class App:
 
     def set_active_scan_profile(self, profile):
         self.active_scan_profile = profile
-        self.scan_profile_store.active_profile = profile
 
     def get_active_scan_profile(self):
         return self.active_scan_profile

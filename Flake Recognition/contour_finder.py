@@ -1,8 +1,76 @@
 import os
+import json
+from pathlib import Path
+
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from tkinter import filedialog
+
+
+AN_TEST_PROFILE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "App"
+    / "Profiles"
+    / "An_Test"
+    / "profile.json"
+)
+
+def _load_profile_classes(profile_path):
+    profile_path = Path(profile_path)
+
+    try:
+        profile_data = json.loads(profile_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Profile was not found: {profile_path}") from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Could not read profile: {profile_path}") from exc
+
+    profile_classes = []
+
+    for profile_class in profile_data.get("classes", []):
+        try:
+            color = profile_class["average_color_rgb"]
+            average_color_rgb = np.array(
+                [color["red"], color["green"], color["blue"]],
+                dtype=np.float64,
+            )
+            tolerance = int(profile_class["flood_fill"]["threshold"])
+            name = str(profile_class["name"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"Profile class has invalid color data: {profile_path}") from exc
+
+        if np.any(average_color_rgb < 0) or np.any(average_color_rgb > 255):
+            raise ValueError(f"Profile class {name!r} has an invalid average color.")
+        if not 0 <= tolerance <= 255:
+            raise ValueError(f"Profile class {name!r} has an invalid tolerance.")
+
+        profile_classes.append({
+            "name": name,
+            "average_color_rgb": average_color_rgb,
+            "tolerance": tolerance,
+        })
+
+    if not profile_classes:
+        raise ValueError(f"Profile contains no color classes: {profile_path}")
+
+    return profile_classes
+
+def _match_profile_class(average_color_rgb, profile_classes):
+    matches = []
+
+    for profile_class in profile_classes:
+        channel_difference = np.abs(
+            average_color_rgb - profile_class["average_color_rgb"]
+        )
+
+        if np.all(channel_difference <= profile_class["tolerance"]):
+            matches.append((np.linalg.norm(channel_difference), profile_class))
+
+    if not matches:
+        return None
+
+    return min(matches, key=lambda match: match[0])[1]
 
 def _perimeter_point(distance, width, height):
     top_len = width - 1
@@ -119,9 +187,111 @@ def _find_seed_in_contour(contour, allowed_mask):
 
     return int(xs[closest_index]), int(ys[closest_index])
 
-def find_flakes(image_bgr, edge_threshold=10, area_threshold=500, display=False, return_details=False):
+def _find_internal_region_pixels(image_rgb, closed_edges, contour_groups, profile_classes=None):
+    height, width = closed_edges.shape
+    internal_mask = np.zeros((height, width), dtype=np.uint8)
+    processed_mask = np.zeros((height, width), dtype=np.uint8)
+    region_results = []
+
+    for external_contour, internal_contours in contour_groups:
+        x, y, w, h = cv2.boundingRect(external_contour)
+        x1 = max(0, x - 1)
+        y1 = max(0, y - 1)
+        x2 = min(width, x + w + 1)
+        y2 = min(height, y + h + 1)
+        local_height = y2 - y1
+        local_width = x2 - x1
+
+        local_external_contour = external_contour.copy()
+        local_external_contour[:, 0, 0] -= x1
+        local_external_contour[:, 0, 1] -= y1
+
+        external_mask = np.zeros((local_height, local_width), dtype=np.uint8)
+        cv2.drawContours(external_mask, [local_external_contour], -1, 255, thickness=cv2.FILLED)
+
+        local_closed_edges = closed_edges[y1:y2, x1:x2]
+        local_internal_mask = internal_mask[y1:y2, x1:x2]
+        local_processed_mask = processed_mask[y1:y2, x1:x2]
+        allowed_mask = (external_mask > 0) & (local_closed_edges == 0) & (local_processed_mask == 0)
+
+        for internal_contour in internal_contours:
+            local_internal_contour = internal_contour.copy()
+            local_internal_contour[:, 0, 0] -= x1
+            local_internal_contour[:, 0, 1] -= y1
+
+            seed = _find_seed_in_contour(local_internal_contour, allowed_mask)
+
+            if seed is None:
+                continue
+
+            flood_image = np.zeros((local_height, local_width), dtype=np.uint8)
+            flood_mask = np.zeros((local_height + 2, local_width + 2), dtype=np.uint8)
+            flood_mask[1:-1, 1:-1] = np.where(allowed_mask, 0, 1).astype(np.uint8)
+
+            cv2.floodFill(flood_image, flood_mask, seed, 255, flags=4)
+
+            region_mask = flood_image == 255
+
+            if not np.any(region_mask):
+                continue
+
+            region_pixels = image_rgb[y1:y2, x1:x2][region_mask]
+            average_color_rgb = np.mean(region_pixels, axis=0)
+            matched_class = (
+                _match_profile_class(average_color_rgb, profile_classes)
+                if profile_classes is not None
+                else None
+            )
+            is_match = profile_classes is None or matched_class is not None
+
+            if is_match:
+                local_internal_mask[region_mask] = 255
+
+            local_processed_mask[region_mask] = 255
+            allowed_mask[region_mask] = False
+
+            region_results.append({
+                "seed_point": (seed[0] + x1, seed[1] + y1),
+                "average_color_rgb": tuple(
+                    int(round(channel)) for channel in average_color_rgb
+                ),
+                "matched_class": matched_class["name"] if matched_class else None,
+                "pixel_count": int(np.count_nonzero(region_mask)),
+            })
+
+    return internal_mask, processed_mask, region_results
+
+def _create_classified_image(image_shape, external_contours, internal_mask):
+    """Return an RGB image: background black, external white, internal red."""
+    height, width = image_shape[:2]
+    external_mask = np.zeros((height, width), dtype=np.uint8)
+
+    if external_contours:
+        cv2.drawContours(external_mask, external_contours, -1, 255, thickness=cv2.FILLED)
+
+    classified_image = np.zeros((height, width, 3), dtype=np.uint8)
+    classified_image[external_mask > 0] = (255, 255, 255)
+    classified_image[internal_mask > 0] = (255, 0, 0)
+
+    return classified_image, external_mask
+
+def find_flakes(
+    image_bgr,
+    edge_threshold=10,
+    area_threshold=500,
+    display=False,
+    return_details=False,
+    profile_path=None,
+):
+    """Classify pixels and return ``(classified_rgb, external_contours)``.
+
+    Background pixels are black, pixels inside an area-filtered external contour
+    are white, and matching internal regions are red. When ``profile_path`` is
+    provided, nonmatching internal regions remain white.
+    """
 
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    profile_classes = _load_profile_classes(profile_path) if profile_path else None
     
     R = image_bgr[:, :, 2]
     G = image_bgr[:, :, 1]
@@ -147,6 +317,7 @@ def find_flakes(image_bgr, edge_threshold=10, area_threshold=500, display=False,
         all_external_contours = []
         external_contours = []
         internal_contours = []
+        contour_groups = []
     else:
         hierarchy = hierarchy[0]
         all_external_indices = [
@@ -175,15 +346,29 @@ def find_flakes(image_bgr, edge_threshold=10, area_threshold=500, display=False,
 
             if outer_parent in external_index_set:
                 internal_contours_by_external[outer_parent].append(cnt)
+
+        contour_groups = [
+            (contours[i], internal_contours_by_external[i])
+            for i in external_indices
+    ]
     
     area_filtered_contours = external_contours
+    internal_mask, all_internal_mask, region_results = _find_internal_region_pixels(
+        image_rgb,
+        closed_edges,
+        contour_groups,
+        profile_classes,
+    )
+    classified_image, external_mask = _create_classified_image(
+        image_rgb.shape,
+        area_filtered_contours,
+        internal_mask,
+    )
     
     contour_img = image_rgb.copy()
-    background_img = image_rgb.copy()
     
     cv2.drawContours(contour_img, area_filtered_contours, -1, (0, 255, 0), 2)
     cv2.drawContours(contour_img, internal_contours, -1, (255, 0, 0), 2)
-    cv2.drawContours(background_img, all_external_contours, -1, (0, 0, 0), thickness=cv2.FILLED)
     
     if display:
         fig, axs = plt.subplots(2, 2, figsize=(12, 10))
@@ -196,8 +381,8 @@ def find_flakes(image_bgr, edge_threshold=10, area_threshold=500, display=False,
         axs[1, 0].imshow(contour_img)
         axs[1, 0].set_title("Detected Flakes")
         
-        axs[1, 1].imshow(background_img)
-        axs[1, 1].set_title("Masked Background")
+        axs[1, 1].imshow(classified_image)
+        axs[1, 1].set_title("Pixel Classification")
         
         for ax in axs.ravel():
             ax.axis('off')
@@ -212,95 +397,49 @@ def find_flakes(image_bgr, edge_threshold=10, area_threshold=500, display=False,
             "closed_edges": closed_edges,
             "all_external_contours": all_external_contours,
             "internal_contours": internal_contours,
-            "internal_contours_by_external": [
-                (contours[i], internal_contours_by_external[i])
-                for i in external_indices
-            ] if hierarchy is not None else [],
+            "internal_contours_by_external": contour_groups,
+            "external_mask": external_mask,
+            "internal_mask": internal_mask,
+            "all_internal_mask": all_internal_mask,
+            "internal_region_results": region_results,
+            "profile_path": str(profile_path) if profile_path else None,
+            "classified_image": classified_image,
             "contour_img": contour_img,
         }
 
-        return background_img, area_filtered_contours, details
+        return classified_image, area_filtered_contours, details
     
-    return background_img, area_filtered_contours
+    return classified_image, area_filtered_contours
 
-def floodfill_internal_contours(image_bgr, edge_threshold=10, area_threshold=500, display=False):
-    _, external_contours, details = find_flakes(
+def floodfill_internal_contours(
+    image_bgr,
+    edge_threshold=10,
+    area_threshold=500,
+    display=False,
+    profile_path=None,
+):
+    classified_image, _, details = find_flakes(
         image_bgr,
         edge_threshold=edge_threshold,
         area_threshold=area_threshold,
         display=False,
         return_details=True,
+        profile_path=profile_path,
     )
 
-    image_rgb = details["image_rgb"]
-    closed_edges = details["closed_edges"]
-    height, width = closed_edges.shape
-    segmented_mask = np.zeros((height, width), dtype=np.uint8)
-
-    for external_contour, internal_contours in details["internal_contours_by_external"]:
-        x, y, w, h = cv2.boundingRect(external_contour)
-        x1 = max(0, x - 1)
-        y1 = max(0, y - 1)
-        x2 = min(width, x + w + 1)
-        y2 = min(height, y + h + 1)
-        local_height = y2 - y1
-        local_width = x2 - x1
-
-        local_external_contour = external_contour.copy()
-        local_external_contour[:, 0, 0] -= x1
-        local_external_contour[:, 0, 1] -= y1
-
-        external_mask = np.zeros((local_height, local_width), dtype=np.uint8)
-        cv2.drawContours(external_mask, [local_external_contour], -1, 255, thickness=cv2.FILLED)
-
-        local_closed_edges = closed_edges[y1:y2, x1:x2]
-        local_segmented_mask = segmented_mask[y1:y2, x1:x2]
-        allowed_mask = (external_mask > 0) & (local_closed_edges == 0) & (local_segmented_mask == 0)
-
-        for internal_contour in internal_contours:
-            local_internal_contour = internal_contour.copy()
-            local_internal_contour[:, 0, 0] -= x1
-            local_internal_contour[:, 0, 1] -= y1
-
-            seed = _find_seed_in_contour(local_internal_contour, allowed_mask)
-
-            if seed is None:
-                continue
-
-            flood_image = np.zeros((local_height, local_width), dtype=np.uint8)
-            flood_mask = np.zeros((local_height + 2, local_width + 2), dtype=np.uint8)
-            flood_mask[1:-1, 1:-1] = np.where(allowed_mask, 0, 1).astype(np.uint8)
-
-            cv2.floodFill(flood_image, flood_mask, seed, 255, flags=4)
-
-            region_mask = flood_image == 255
-
-            if not np.any(region_mask):
-                continue
-
-            local_segmented_mask[region_mask] = 255
-            allowed_mask[region_mask] = False
-
-    floodfill_overlay = image_rgb.copy()
-    colored_regions = image_rgb.copy()
-    colored_regions[segmented_mask > 0] = (255, 0, 0)
-    floodfill_overlay = cv2.addWeighted(floodfill_overlay, 0.7, colored_regions, 0.3, 0)
-
+    segmented_mask = details["internal_mask"]
     filled_regions, _ = cv2.findContours(segmented_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cv2.drawContours(floodfill_overlay, external_contours, -1, (0, 255, 0), 2)
-    cv2.drawContours(floodfill_overlay, details["internal_contours"], -1, (255, 0, 0), 1)
-    cv2.drawContours(floodfill_overlay, filled_regions, -1, (255, 255, 0), 2)
 
     if display:
         plt.figure(figsize=(10, 8))
-        plt.imshow(floodfill_overlay)
-        plt.title("Flood Fill Overlay")
+        plt.imshow(classified_image)
+        plt.title("Pixel Classification")
         plt.axis("off")
 
         plt.tight_layout()
         plt.show()
 
-    return floodfill_overlay, segmented_mask, filled_regions
+    return classified_image, segmented_mask, filled_regions
 
 if __name__ == "__main__":
     '''
@@ -318,6 +457,37 @@ if __name__ == "__main__":
     '''
             
     image_path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp")])
+
+    if not image_path:
+        raise SystemExit("No image selected.")
+
     image_bgr = cv2.imread(image_path, cv2.IMREAD_COLOR)
-    find_flakes(image_bgr, display=True)
-    floodfill_internal_contours(image_bgr, display=True)
+
+    if image_bgr is None:
+        raise FileNotFoundError(f"Could not read image: {image_path}")
+
+    _, _, details = find_flakes(
+        image_bgr,
+        display=False,
+        return_details=True,
+        profile_path=AN_TEST_PROFILE_PATH,
+    )
+
+    # Build a raw label image with exactly one output pixel per input pixel.
+    # OpenCV uses BGR: black = background, white = external, red = internal.
+    pixel_labels_bgr = np.zeros_like(image_bgr)
+    pixel_labels_bgr[details["external_mask"] > 0] = (255, 255, 255)
+    pixel_labels_bgr[details["internal_mask"] > 0] = (0, 0, 255)
+    output_path = f"{os.path.splitext(image_path)[0]}_An_Test_pixel_labels.png"
+
+    if not cv2.imwrite(output_path, pixel_labels_bgr):
+        raise OSError(f"Could not save pixel-label image: {output_path}")
+
+    height, width = pixel_labels_bgr.shape[:2]
+    matched_regions = sum(
+        result["matched_class"] is not None
+        for result in details["internal_region_results"]
+    )
+    tested_regions = len(details["internal_region_results"])
+    print(f"Saved {width}x{height} pixel-label image to: {output_path}")
+    print(f"Matched {matched_regions} of {tested_regions} internal regions to An_Test.")

@@ -162,8 +162,7 @@ class ViewScansPanel:
         menu_bar.add_cascade(label="Results", menu=self.results_menu)
 
     def show(self):
-        if hasattr(self.app, "scan_profile_panel"):
-            self.app.scan_profile_panel.hide()
+        self.app.close_all_panels()
         self.frame.place(relx=0.0, rely=0.0, anchor="nw")
 
     def hide(self):

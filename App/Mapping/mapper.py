@@ -4,9 +4,8 @@ import cv2
 import numpy as np
 import tkinter as tk
 
-from config import HOME_DIR, PIXEL_SIZE, CROP_RATIO, RESOLUTION_DIM
+from config import PIXEL_SIZE, CROP_RATIO, RESOLUTION_DIM
 from Scanning.coordinate_generator import generate_rect_coords
-from Imaging import vignetting_corrector
 from Scanning import wafer_detection
 
 class Mapper:
@@ -103,6 +102,7 @@ class Mapper:
                     f"Score={score:.3f} | Matches={num_matches} | Inliers={num_inliers}"
                 )
 
+                '''
                 self.save_shift_comparison(
                     last_crop,
                     cur_crop,
@@ -111,6 +111,7 @@ class Mapper:
                     shift_y=shift_y,
                     filename=f"orb_compare_{int(time.time() * 1000)}.png"
                 )
+                '''
 
                 map_x = self.last_live_map_x + int(round(shift_x))
                 map_y = self.last_live_map_y + int(round(shift_y))
@@ -319,9 +320,6 @@ class Mapper:
 
             print(f"Generated {total_frames} coordinates for mapping: {coords}")
 
-            flatfield_img = cv2.imread(str(HOME_DIR / "Flatfields" / f"vignette_filter_{self.app.get_magnification().lower()}_{self.app.get_resolution().lower()}.png"))
-            cropped_flatfield = self.frame_processor.crop_frame(flatfield_img)
-
             for i, (offset_x, offset_y) in enumerate(coords, start=1):
 
                 resolution = self.app.get_resolution()
@@ -334,11 +332,7 @@ class Mapper:
 
                 img = self.frame_processor.capture_frame(num_images=2)
 
-                img = vignetting_corrector.correct_vignetting_effect(
-                    img,
-                    cropped_flatfield,
-                    reference_point=(img.shape[1] // 2, img.shape[0] // 2),
-                )
+                img = self.frame_processor.apply_vignette_filter(img)
 
                 if img is None:
                     print("No image captured, skipping this tile.")
@@ -346,7 +340,7 @@ class Mapper:
 
                 filter_img = wafer_detection.wafer_filter(img, display=False)
 
-                self.frame_processor.save_image(image=img, filename=f"mapper_output_{i}.png")
+                #self.frame_processor.save_image(image=img, filename=f"mapper_output_{i}.png")
 
                 self.place_frame_on_map(img, zoom=zoom, filter_img=filter_img)
 

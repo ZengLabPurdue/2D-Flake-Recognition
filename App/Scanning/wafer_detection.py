@@ -7,24 +7,35 @@ from scipy.signal import find_peaks
 
 def wafer_filter(image, threshold=None, sample=30, display=False):
 
+    if image is None or image.ndim != 3 or image.shape[2] < 3:
+        raise ValueError("wafer_filter requires a BGR color image.")
+
+    non_black_mask = np.any(image[:, :, :3] != 0, axis=2)
+
     if (display):
         plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
         plt.axis("off")
         plt.show()
 
-    if threshold:
-        pass
-    else:
-        sample = 30
-        values = image[::sample, ::sample, 0].ravel()
+    if not np.any(non_black_mask):
+        return np.zeros(image.shape[:2], dtype=np.uint8)
+
+    if threshold is None:
+        sample = max(1, int(sample))
+        sampled_image = image[::sample, ::sample]
+        sampled_mask = non_black_mask[::sample, ::sample]
+        values = sampled_image[:, :, 0][sampled_mask]
+
+        if values.size == 0:
+            values = image[:, :, 0][non_black_mask]
 
         hist = np.bincount(values, minlength=256)
         threshold = threshold_after_highest_peak(hist, display=display)
-        print("Threshold:", threshold)
+        #print("Threshold:", threshold)
 
     blue = image[:, :, 0] 
 
-    binary = (blue >= threshold).astype(np.uint8) * 255
+    binary = ((blue >= threshold) & non_black_mask).astype(np.uint8) * 255
     h, w = binary.shape[:2]
 
     if (display):
@@ -98,42 +109,57 @@ def find_wafers(filter_map, true_map):
         cv2.rectangle(true_map, (x, y), (x+w, y+h), (255,255,0), 5)
     return wafers, true_map
 
+def select_and_filter_map():
+    map_path = filedialog.askopenfilename(
+        title="Select Map Image",
+        filetypes=[
+            ("Image files", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff"),
+            ("All files", "*.*"),
+        ],
+    )
+
+    if not map_path:
+        return None
+
+    map_image = cv2.imread(map_path, cv2.IMREAD_COLOR)
+    if map_image is None:
+        raise ValueError(f"Could not read map image: {map_path}")
+
+    filtered_map = wafer_filter(map_image, display=False)
+
+    map_name = os.path.splitext(os.path.basename(map_path))[0]
+    save_path = filedialog.asksaveasfilename(
+        title="Save Filtered Map",
+        initialdir=os.path.dirname(map_path),
+        initialfile=f"{map_name}_filtered.png",
+        defaultextension=".png",
+        filetypes=[
+            ("PNG image", "*.png"),
+            ("Bitmap image", "*.bmp"),
+            ("TIFF image", "*.tif *.tiff"),
+        ],
+    )
+
+    if save_path:
+        if not cv2.imwrite(save_path, filtered_map):
+            raise OSError(f"Could not save filtered map to: {save_path}")
+        print(f"Filtered map saved to: {save_path}")
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 7))
+    fig.suptitle(os.path.basename(map_path))
+
+    axes[0].imshow(cv2.cvtColor(map_image, cv2.COLOR_BGR2RGB))
+    axes[0].set_title("Original Map")
+    axes[0].axis("off")
+
+    axes[1].imshow(filtered_map, cmap="gray", vmin=0, vmax=255)
+    axes[1].set_title("Filtered Map")
+    axes[1].axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
+    return filtered_map
+
 if __name__ == "__main__":
-    folder_path = filedialog.askdirectory(title="Select Image Folder")
-    extensions = (".png", ".jpg", ".jpeg", ".bmp")
-
-    if not folder_path:
-        raise RuntimeError("No folder selected.")
-
-    image_filenames = [
-        filename for filename in sorted(os.listdir(folder_path))
-        if filename.lower().endswith(extensions)
-    ]
-
-    if not image_filenames:
-        raise FileNotFoundError(f"No images found in folder: {folder_path}")
-
-    for index, filename in enumerate(image_filenames, start=1):
-        image_path = os.path.join(folder_path, filename)
-        image = cv2.imread(image_path, cv2.IMREAD_COLOR)
-
-        if image is None:
-            print(f"Skipping unreadable image: {image_path}")
-            continue
-
-        print(f"Processing {index}/{len(image_filenames)}: {filename}")
-        filtered = wafer_filter(image, display=False)
-
-        fig, axs = plt.subplots(1, 2, figsize=(14, 7))
-        fig.suptitle(filename)
-
-        axs[0].imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-        axs[0].set_title("Original")
-        axs[0].axis("off")
-
-        axs[1].imshow(filtered, cmap="gray")
-        axs[1].set_title("Wafer Filter")
-        axs[1].axis("off")
-
-        plt.tight_layout()
-        plt.show()
+    select_and_filter_map()

@@ -8,24 +8,21 @@ from tkinter import ttk
 
 from Scanning.contour_extractor import get_region_from_point
 from Scanning.scan_profile import (
-    ProfileClassDraft,
+    ScanProfile,
     ScanProfileError,
-    ScanProfileStore,
-    ScanSearchProfile,
     build_region_overlay,
 )
 
 
 class ScanProfilePanel:
-    """Right-side editor and viewer for scan search profiles."""
 
     IMAGE_TYPES = [("Images", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff")]
 
-    def __init__(self, parent, root, app, profile_store: ScanProfileStore):
+    def __init__(self, parent, root, app, scan_profile: ScanProfile):
         self.parent = parent
         self.root = root
         self.app = app
-        self.profile_store = profile_store
+        self.scan_profile = scan_profile
 
         self.mode = "create"
         self.class_edit_active = False
@@ -33,9 +30,7 @@ class ScanProfilePanel:
         self.editing_class_index: int | None = None
         self.pending_new_class = False
         self._updating_class_list = False
-        self.draft_classes: list[ProfileClassDraft] = []
-        self.loaded_profile: ScanSearchProfile | None = None
-
+        self.drag_class_index = None
         self.current_source_path: Path | None = None
         self.current_image_bgr: np.ndarray | None = None
         self.current_region_mask: np.ndarray | None = None
@@ -121,6 +116,9 @@ class ScanProfilePanel:
         self.class_list.pack(side="left", fill="both", expand=True)
         class_scrollbar.pack(side="right", fill="y")
         self.class_list.bind("<<ListboxSelect>>", self._on_class_selected)
+        self.class_list.bind("<ButtonPress-1>", self._start_class_drag)
+        self.class_list.bind("<B1-Motion>", self._drag_class)
+        self.class_list.bind("<ButtonRelease-1>", self._end_class_drag)
 
         class_button_row = Frame(background, bg="white", width=184, height=30)
         class_button_row.place(relx=0.5, y=225, anchor="n")
@@ -278,8 +276,7 @@ class ScanProfilePanel:
         self.selected_class_index = None
         self.editing_class_index = None
         self.pending_new_class = False
-        self.loaded_profile = None
-        self.draft_classes.clear()
+        self.scan_profile.clear()
         self.profile_name_var.set("")
         self.minimum_size_var.set("")
         self.maximum_size_var.set("")
@@ -303,7 +300,7 @@ class ScanProfilePanel:
         self.app.set_view("Load Search Profile")
         self.show()
         self.app.display_image_message("Open a profile, then select a class.")
-        self.profile_store.profiles_dir.mkdir(parents=True, exist_ok=True)
+        self.scan_profile.profiles_dir.mkdir(parents=True, exist_ok=True)
         load_folder = messagebox.askyesnocancel(
             "Load Scan Search Profile",
             "Load a profile folder?\n\n"
@@ -316,19 +313,19 @@ class ScanProfilePanel:
         if load_folder:
             selected = filedialog.askdirectory(
                 title="Select Scan Search Profile Folder",
-                initialdir=self.profile_store.profiles_dir,
+                initialdir=self.scan_profile.profiles_dir,
             )
         else:
             selected = filedialog.askopenfilename(
                 title="Select Scan Search Profile JSON",
-                initialdir=self.profile_store.profiles_dir,
+                initialdir=self.scan_profile.profiles_dir,
                 filetypes=[("Scan search profile", "profile.json"), ("JSON", "*.json")],
             )
         if not selected:
             return
 
         try:
-            profile = self.profile_store.load_profile(selected)
+            profile = self.scan_profile.load_profile(selected)
         except ScanProfileError as exc:
             messagebox.showerror("Invalid Scan Search Profile", str(exc))
             return
@@ -340,21 +337,13 @@ class ScanProfilePanel:
             f"Loaded '{profile.name}' with {len(profile.classes)} class(es).",
         )
 
-    def show_loaded_profile(self, profile: ScanSearchProfile):
+    def show_loaded_profile(self, profile: ScanProfile):
         self.mode = "edit"
         self.class_edit_active = False
         self.selected_class_index = None
         self.editing_class_index = None
         self.pending_new_class = False
-        self.loaded_profile = profile
-        try:
-            self.draft_classes = [
-                self.profile_store.profile_class_to_draft(profile_class)
-                for profile_class in profile.classes
-            ]
-        except ScanProfileError as exc:
-            self.draft_classes.clear()
-            messagebox.showerror("Profile Edit Error", str(exc))
+        self.scan_profile = profile
         self.profile_name_var.set(profile.name)
         self.minimum_size_var.set("")
         self.maximum_size_var.set("")
@@ -436,18 +425,7 @@ class ScanProfilePanel:
             )
             return
 
-        draft = ProfileClassDraft(
-            name=class_name,
-            source_path=self.current_source_path,
-            image_bgr=self.current_image_bgr.copy(),
-            region_mask=self.current_region_mask.copy(),
-            seed_point=self.current_seed_point,
-            threshold=self.current_threshold,
-            minimum_size_um=minimum_size,
-            maximum_size_um=maximum_size,
-        )
-
-        existing_index = self._draft_index_for_name(class_name)
+        existing_index = self._class_index_for_name(class_name)
         if self.editing_class_index is not None:
             if existing_index is not None and existing_index != self.editing_class_index:
                 messagebox.showwarning(
@@ -455,9 +433,9 @@ class ScanProfilePanel:
                     f"A class named '{class_name}' already exists.",
                 )
                 return
-            self.draft_classes[self.editing_class_index] = draft
+            target_index = self.editing_class_index
         elif existing_index is None:
-            self.draft_classes.append(draft)
+            target_index = None
         else:
             replace = messagebox.askyesno(
                 "Replace Class",
@@ -465,7 +443,23 @@ class ScanProfilePanel:
             )
             if not replace:
                 return
-            self.draft_classes[existing_index] = draft
+            target_index = existing_index
+
+        try:
+            self.scan_profile.set_class(
+                name=class_name,
+                source_path=self.current_source_path,
+                image_bgr=self.current_image_bgr.copy(),
+                region_mask=self.current_region_mask.copy(),
+                seed_point=self.current_seed_point,
+                threshold=self.current_threshold,
+                minimum_size_um=minimum_size,
+                maximum_size_um=maximum_size,
+                index=target_index,
+            )
+        except ScanProfileError as exc:
+            messagebox.showwarning("Invalid Class", str(exc))
+            return
 
         self.pending_new_class = False
         self._refresh_class_list()
@@ -484,16 +478,18 @@ class ScanProfilePanel:
             return
 
         index = int(selection[0])
-        if self.pending_new_class and index == len(self.draft_classes):
+        if self.pending_new_class and index == len(self.scan_profile.classes):
             self._set_class_editing_enabled(True)
             return
-        if not 0 <= index < len(self.draft_classes):
+        if not 0 <= index < len(self.scan_profile.classes):
             return
 
         self.selected_class_index = index
         self.editing_class_index = index
         self._set_class_editing_enabled(True)
-        self.status_var.set(f"Editing class: {self.draft_classes[index].name}")
+        self.status_var.set(
+            f"Editing class: {self.scan_profile.get_class(index)['name']}"
+        )
         self.class_name_entry.focus_set()
 
     def remove_selected_class(self):
@@ -504,7 +500,7 @@ class ScanProfilePanel:
             return
 
         index = int(selection[0])
-        if self.pending_new_class and index == len(self.draft_classes):
+        if self.pending_new_class and index == len(self.scan_profile.classes):
             self.pending_new_class = False
             self.selected_class_index = None
             self.editing_class_index = None
@@ -518,7 +514,7 @@ class ScanProfilePanel:
             self.app.display_image_message("Select a class or create a new class.")
             return
 
-        removed = self.draft_classes.pop(index)
+        removed = self.scan_profile.remove_class(index)
         self.selected_class_index = None
         self.editing_class_index = None
         self.pending_new_class = False
@@ -528,7 +524,7 @@ class ScanProfilePanel:
         self.minimum_size_var.set("")
         self.maximum_size_var.set("")
         self._refresh_class_list()
-        self.status_var.set(f"Removed class: {removed.name}")
+        self.status_var.set(f"Removed class: {removed['name']}")
         self.app.display_image_message("Open an image or select a class.")
 
     def new_class(self):
@@ -558,10 +554,7 @@ class ScanProfilePanel:
             return
 
         try:
-            profile = self.profile_store.save_profile(
-                self.profile_name_var.get(),
-                self.draft_classes,
-            )
+            profile = self.scan_profile.save_profile(self.profile_name_var.get())
         except FileExistsError as exc:
             overwrite = messagebox.askyesno(
                 "Replace Profile",
@@ -570,9 +563,8 @@ class ScanProfilePanel:
             if not overwrite:
                 return
             try:
-                profile = self.profile_store.save_profile(
+                profile = self.scan_profile.save_profile(
                     self.profile_name_var.get(),
-                    self.draft_classes,
                     overwrite=True,
                 )
             except (OSError, ScanProfileError) as save_exc:
@@ -644,7 +636,7 @@ class ScanProfilePanel:
             return
         index = int(selection[0])
 
-        if self.pending_new_class and index == len(self.draft_classes):
+        if self.pending_new_class and index == len(self.scan_profile.classes):
             self.editing_class_index = None
             self._set_class_editing_enabled(True)
             return
@@ -652,11 +644,11 @@ class ScanProfilePanel:
         if self.pending_new_class:
             self.pending_new_class = False
             self.class_list.delete(tk.END)
-            self.class_count_var.set(f"Classes: {len(self.draft_classes)}")
+            self.class_count_var.set(f"Classes: {len(self.scan_profile.classes)}")
 
         if self.editing_class_index is not None and self.editing_class_index != index:
             previous_index = self.editing_class_index
-            previous_name = self.draft_classes[previous_index].name
+            previous_name = self.scan_profile.get_class(previous_index)["name"]
             self._updating_class_list = True
             try:
                 self.class_list.delete(previous_index)
@@ -666,32 +658,77 @@ class ScanProfilePanel:
             finally:
                 self._updating_class_list = False
 
-        if index >= len(self.draft_classes):
+        if index >= len(self.scan_profile.classes):
             return
-        draft = self.draft_classes[index]
+        profile_class = self.scan_profile.get_class(index)
         self.selected_class_index = index
         self.editing_class_index = None
         self._set_class_editing_enabled(False)
-        self.class_name_var.set(draft.name)
-        self.threshold_var.set(str(draft.threshold))
+        self.class_name_var.set(profile_class["name"])
+        self.threshold_var.set(str(profile_class["threshold"]))
         self.minimum_size_var.set(
-            "" if draft.minimum_size_um is None else f"{draft.minimum_size_um:g}"
+            ""
+            if profile_class["minimum_size_um"] is None
+            else f"{profile_class['minimum_size_um']:g}"
         )
         self.maximum_size_var.set(
-            "" if draft.maximum_size_um is None else f"{draft.maximum_size_um:g}"
+            ""
+            if profile_class["maximum_size_um"] is None
+            else f"{profile_class['maximum_size_um']:g}"
         )
-        self.current_source_path = draft.source_path
-        self.current_image_bgr = draft.image_bgr.copy()
-        self.current_region_mask = draft.region_mask.copy()
-        self.current_seed_point = draft.seed_point
-        self.current_threshold = draft.threshold
+        self.current_source_path = profile_class["source_path"]
+        self.current_image_bgr = profile_class["image_bgr"].copy()
+        self.current_region_mask = profile_class["region_mask"].copy()
+        self.current_seed_point = profile_class["seed_point"]
+        self.current_threshold = profile_class["threshold"]
         preview = build_region_overlay(
             self.current_image_bgr,
             self.current_region_mask,
             self.current_seed_point,
         )
         self._display_bgr(preview)
-        self.status_var.set(f"Selected {draft.name}. Click Edit class to change it.")
+        self.status_var.set(
+            f"Selected {profile_class['name']}. Click Edit class to change it."
+        )
+
+    def _start_class_drag(self, event):
+        self.drag_class_index = None
+        if self.class_edit_active or self.pending_new_class:
+            return
+
+        index = self.class_list.nearest(event.y)
+        item_bounds = self.class_list.bbox(index)
+        if (
+            not 0 <= index < len(self.scan_profile.classes)
+            or item_bounds is None
+            or not item_bounds[1] <= event.y <= item_bounds[1] + item_bounds[3]
+        ):
+            return
+        self.drag_class_index = index
+
+    def _drag_class(self, event):
+        if self.drag_class_index is None:
+            return
+
+        target_index = self.class_list.nearest(event.y)
+        target_index = max(0, min(target_index, len(self.scan_profile.classes) - 1))
+        if target_index == self.drag_class_index:
+            return "break"
+
+        profile_class = self.scan_profile.move_class(
+            self.drag_class_index,
+            target_index,
+        )
+        self.drag_class_index = target_index
+        self.selected_class_index = target_index
+        self._refresh_class_list(select_name=profile_class["name"])
+        self.status_var.set(
+            f"Moved {profile_class['name']} to position {target_index + 1}."
+        )
+        return "break"
+
+    def _end_class_drag(self, event):
+        self.drag_class_index = None
 
     def _display_bgr(self, image_bgr: np.ndarray):
         self.app.display_image(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
@@ -702,12 +739,12 @@ class ScanProfilePanel:
         *,
         select_pending: bool = False,
     ):
-        classes = self.draft_classes
+        classes = self.scan_profile.classes
         self._updating_class_list = True
         try:
             self.class_list.delete(0, tk.END)
             for profile_class in classes:
-                self.class_list.insert(tk.END, f"  {profile_class.name}")
+                self.class_list.insert(tk.END, f"  {profile_class['name']}")
 
             if self.pending_new_class and self.mode in ("create", "edit"):
                 pending_name = self.class_name_var.get().strip() or "(unnamed class)"
@@ -717,7 +754,7 @@ class ScanProfilePanel:
             self.class_count_var.set(f"Classes: {displayed_count}")
             if select_name is not None:
                 for index, profile_class in enumerate(classes):
-                    if profile_class.name.casefold() == select_name.casefold():
+                    if profile_class["name"].casefold() == select_name.casefold():
                         self.class_list.selection_set(index)
                         self.class_list.activate(index)
                         break
@@ -763,7 +800,7 @@ class ScanProfilePanel:
             values.append(value)
 
         minimum, maximum = values
-        return self.profile_store.validate_size_requirement(minimum, maximum)
+        return self.scan_profile.validate_size_requirement(minimum, maximum)
 
     def _on_class_name_changed(self, *_):
         if not self.class_edit_active or not hasattr(self, "class_list"):
@@ -772,7 +809,7 @@ class ScanProfilePanel:
         if self.editing_class_index is not None:
             list_index = self.editing_class_index
         elif self.pending_new_class:
-            list_index = len(self.draft_classes)
+            list_index = len(self.scan_profile.classes)
         else:
             return
 
@@ -800,16 +837,15 @@ class ScanProfilePanel:
         self.panel_frame.configure(height=panel_height)
         self.panel_background.configure(height=panel_height - 2)
 
-    def _draft_index_for_name(self, class_name: str) -> int | None:
-        normalized_name = class_name.casefold()
-        for index, draft in enumerate(self.draft_classes):
-            if draft.name.casefold() == normalized_name:
-                return index
-        return None
+    def _class_index_for_name(self, class_name: str) -> int | None:
+        return self.scan_profile.find_class(class_name)
 
     def _next_default_class_name(self) -> str:
-        existing_names = {draft.name.casefold() for draft in self.draft_classes}
-        class_number = len(self.draft_classes) + 1
+        existing_names = {
+            profile_class["name"].casefold()
+            for profile_class in self.scan_profile.classes
+        }
+        class_number = len(self.scan_profile.classes) + 1
         while f"class {class_number}".casefold() in existing_names:
             class_number += 1
         return f"Class {class_number}"
@@ -822,8 +858,7 @@ class ScanProfilePanel:
         )
 
     def show(self):
-        if hasattr(self.app, "view_scans_panel"):
-            self.app.view_scans_panel.hide()
+        self.app.close_all_panels()
         self.frame.place(relx=0.0, rely=0.0, anchor="nw")
 
     def hide(self):

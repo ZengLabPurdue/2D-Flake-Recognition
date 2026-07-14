@@ -8,8 +8,6 @@ import numpy as np
 
 from config import HOME_DIR, PIXEL_SIZE, RESOLUTION_DIM, CROP_RATIO
 
-from Imaging import vignetting_corrector
-
 from . import flake_detection
 from . import wafer_detection
 from . import coordinate_generator
@@ -227,9 +225,6 @@ class ScanManager:
             x, y, _ = self.stage.get_position()
             scan_coordinates_10x = [[x, y, 10, 10]]
 
-        flatfield_img = cv2.imread(str(HOME_DIR / "Flatfields" / f"vignette_filter_{self.app.get_magnification().lower()}_{self.app.get_resolution().lower()}.png"))
-        cropped_flatfield = self.frame_processor.crop_frame(flatfield_img)
-
         for i, coordinates in enumerate(scan_coordinates_10x, start=1):
             wafer_time = time.time()
 
@@ -263,11 +258,7 @@ class ScanManager:
 
                 img = self.frame_processor.capture_frame()
 
-                img = vignetting_corrector.correct_vignetting_effect(
-                    img,
-                    cropped_flatfield,
-                    reference_point=(img.shape[1] // 2, img.shape[0] // 2),
-                )
+                img = self.frame_processor.apply_vignette_filter(img)
 
                 img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
@@ -355,9 +346,6 @@ class ScanManager:
             x, y, _ = self.stage.get_position()
             scan_coordinates_20x = [[x, y, 22, 30]]
 
-        flatfield_img = cv2.imread(str(HOME_DIR / "Flatfields" / f"vignette_filter_{self.app.get_magnification().lower()}_{self.app.get_resolution().lower()}.png"))
-        cropped_flatfield = self.frame_processor.crop_frame(flatfield_img)
-
         for i, coordinates in enumerate(scan_coordinates_20x, start=1):
             wafer_time = time.time()
 
@@ -390,11 +378,7 @@ class ScanManager:
 
                 img = self.frame_processor.capture_frame()
 
-                img = vignetting_corrector.correct_vignetting_effect(
-                    img,
-                    cropped_flatfield,
-                    reference_point=(img.shape[1] // 2, img.shape[0] // 2),
-                )
+                img = self.frame_processor.apply_vignette_filter(img)
 
                 img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
@@ -564,7 +548,10 @@ class ScanManager:
 
         save_path = HOME_DIR / "Flatfields" / f"vignette_filter_{magnification.lower()}_{self.app.get_resolution().lower()}.png"
 
-        cv2.imwrite(save_path, vignette_filter)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        if not cv2.imwrite(str(save_path), vignette_filter):
+            raise OSError(f"Could not save vignette filter to {save_path}")
+        self.frame_processor.clear_vignette_filter_cache()
 
         print(f"Saved vignette image to: {save_path}")
 
