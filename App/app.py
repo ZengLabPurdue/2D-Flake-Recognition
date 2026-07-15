@@ -21,6 +21,7 @@ from UI.panels.stage_control_panel import StageControlPanel
 from UI.panels.objective_control_panel import ObjectiveControlPanel
 from UI.panels.focus_panel import FocusPanel
 from UI.panels.scan_status_panel import ScanStatusPanel
+from UI.panels.scan_setup_panel import ScanSetupPanel
 from UI.panels.view_scans_panel import ViewScansPanel
 from UI.panels.scan_profile_panel import ScanProfilePanel
 from UI.panels.capture_panel import CapturePanel
@@ -92,7 +93,10 @@ class App:
 
         self.info_panel = InfoPanel(parent=self.main_frame)
 
-        self.scan_status_panel = ScanStatusPanel(parent=self.main_frame)
+        self.scan_status_panel = ScanStatusPanel(
+            parent=self.main_frame,
+            root=self.root,
+        )
 
         self.mapper = Mapper(
             root=self.root,
@@ -115,7 +119,9 @@ class App:
             frame_processor=self.frame_processor,
             mapper=self.mapper,
             update_scan_status=self.scan_status_panel.update_status,
+            set_scan_running=self.scan_status_panel.set_scan_running,
         )
+        self.scan_status_panel.set_stop_callback(self.scan_manager.stop_scan)
 
         self.stage_control_panel = StageControlPanel(
             parent=self.main_frame,
@@ -168,6 +174,13 @@ class App:
             scan_profile=self.scan_profile,
         )
 
+        self.scan_setup_panel = ScanSetupPanel(
+            parent=self.main_frame,
+            root=self.root,
+            app=self,
+            scan_manager=self.scan_manager,
+        )
+
         self.focus_controller.sharpness_callback = self.focus_panel.update_sharpness
 
         self.panels.append({
@@ -177,7 +190,7 @@ class App:
         })
 
         self.panels.append({
-            "name": "Status Panel",
+            "name": "Scan Info Panel",
             "frame": self.scan_status_panel.frame,
             "var": BooleanVar(value=False)
         })
@@ -209,6 +222,12 @@ class App:
         self.panels.append({
             "name": "Focus Panel",
             "frame": self.focus_panel.frame,
+            "var": BooleanVar(value=False)
+        })
+
+        self.panels.append({
+            "name": "Scan Setup Panel",
+            "frame": self.scan_setup_panel.frame,
             "var": BooleanVar(value=False)
         })
 
@@ -293,14 +312,7 @@ class App:
         map_menu.add_command(label="Auto Map 2x", command=self.mapper.auto_map_2x)
         menu_bar.add_cascade(label="Map", menu=map_menu)
 
-        scan_menu = Menu(menu_bar, tearoff=0)
-        scan_menu.add_command(label="Run Complete Scan (1 Chip)", command=self.scan_manager.run_complete_scan)
-        scan_menu.add_command(label="Run Full Stage Scan", command=lambda: self.scan_manager.run_complete_scan(window=(50, 25))) #TODO: Add required manual centering popup on stage and tune window size
-        scan_menu.add_command(label="Run 2x Scan", command=lambda: self.scan_manager.run_2x_scan(full_zoom=True)) #TODO: Add window size adjustability / popup
-        scan_menu.add_command(label="Run 10x Scan", command=self.scan_manager.run_10x_scan)
-        scan_menu.add_command(label="Run 20x Scan", command=self.scan_manager.run_20x_scan)
-        scan_menu.add_command(label="Create Vignette Filter", command=self.scan_manager.create_vignette_filter)
-        menu_bar.add_cascade(label="Scan", menu=scan_menu)
+        menu_bar.add_command(label="Scan", command=self.scan_setup_panel.show)
 
         self.root.config(menu=menu_bar)
 

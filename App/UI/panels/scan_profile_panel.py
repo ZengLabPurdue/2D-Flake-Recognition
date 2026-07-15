@@ -8,7 +8,7 @@ from tkinter import ttk
 
 from Imaging import image_metadata
 from Scanning.contour_extractor import get_region_from_point
-from Scanning.contour_finder import find_flakes
+from Scanning.contour_finder import region_contrast_rgb
 from Scanning.scan_profile import (
     ScanProfile,
     ScanProfileError,
@@ -19,6 +19,8 @@ from Scanning.scan_profile import (
 class ScanProfilePanel:
 
     IMAGE_TYPES = [("Vignette-corrected PNG", "*.png")]
+    DEFAULT_FLOOD_FILL_TOLERANCE = 15
+    SIMILAR_CLASS_CONTRAST_DISTANCE = 10.0
 
     def __init__(self, parent, root, app, scan_profile: ScanProfile):
         self.parent = parent
@@ -38,12 +40,16 @@ class ScanProfilePanel:
         self.current_region_mask: np.ndarray | None = None
         self.current_seed_point: tuple[int, int] | None = None
         self.current_threshold: int | None = None
+        self.current_contrast_rgb: tuple[int, int, int] | None = None
 
         self.profile_name_var = tk.StringVar()
         self.minimum_size_var = tk.StringVar()
         self.maximum_size_var = tk.StringVar()
         self.class_name_var = tk.StringVar()
-        self.threshold_var = tk.StringVar(value="5")
+        self.threshold_var = tk.StringVar(
+            value=str(self.DEFAULT_FLOOD_FILL_TOLERANCE)
+        )
+        self.contrast_var = tk.StringVar(value="RGB contrast: —")
         self.class_count_var = tk.StringVar(value="Classes: 0")
         self.status_var = tk.StringVar(value="Create or load a profile from the Scan menu.")
 
@@ -220,16 +226,24 @@ class ScanProfilePanel:
         )
         self.maximum_size_entry.place(x=126, y=0)
 
+        self.contrast_label = Label(
+            background,
+            textvariable=self.contrast_var,
+            bg="white",
+            fg="black",
+        )
+        self.contrast_label.place(x=8, y=482)
+
         self.confirm_region_button = ttk.Button(
             background,
             text="Confirm region",
             style="Normal.TButton",
             command=self.confirm_region,
         )
-        self.confirm_region_button.place(relx=0.5, y=486, anchor="n")
+        self.confirm_region_button.place(relx=0.5, y=509, anchor="n")
 
         status_group = Frame(background, bg="white")
-        status_group.place(relx=0.5, y=524, anchor="n", width=184)
+        status_group.place(relx=0.5, y=547, anchor="n", width=184)
 
         self.status_label = Label(
             status_group,
@@ -252,7 +266,7 @@ class ScanProfilePanel:
         self.panel_frame = panel
         self.panel_background = background
         self.status_group = status_group
-        self.status_group_y = 524
+        self.status_group_y = 547
         self._resize_panel_to_footer()
 
         self.profile_edit_widgets = (
@@ -283,7 +297,7 @@ class ScanProfilePanel:
         self.minimum_size_var.set("")
         self.maximum_size_var.set("")
         self.class_name_var.set("")
-        self.threshold_var.set("5")
+        self.threshold_var.set(str(self.DEFAULT_FLOOD_FILL_TOLERANCE))
         self._clear_pending_image()
         self._set_editing_enabled(True)
         self._refresh_class_list()
@@ -390,9 +404,7 @@ class ScanProfilePanel:
 
         self.current_source_path = source_path
         self.current_image_bgr = image_bgr
-        self.current_region_mask = None
-        self.current_seed_point = None
-        self.current_threshold = None
+        self._clear_region_selection()
         if not self.class_name_var.get().strip():
             self.class_name_var.set(self._next_default_class_name())
 
@@ -453,6 +465,23 @@ class ScanProfilePanel:
                 return
             target_index = existing_index
 
+        similar_match = self._find_similar_class(
+            self.current_contrast_rgb,
+            exclude_index=target_index,
+        )
+        if similar_match is not None:
+            similar_class, contrast_distance = similar_match
+            continue_anyway = messagebox.askyesno(
+                "Add Similar Class?",
+                f"'{class_name}' has RGB contrast {self.current_contrast_rgb} and "
+                f"closely resembles '{similar_class['name']}' with RGB contrast "
+                f"{similar_class['contrast_rgb']}.\n\n"
+                f"Contrast distance: {contrast_distance:.1f}.\n\n"
+                "Do you really want to add this class?",
+            )
+            if not continue_anyway:
+                return
+
         try:
             profile_class = self.scan_profile.set_class(
                 name=class_name,
@@ -474,12 +503,11 @@ class ScanProfilePanel:
         self.selected_class_index = None
         self.editing_class_index = None
         self._set_class_editing_enabled(False)
-        masked_background, _ = find_flakes(self.current_image_bgr)
-        self._display_bgr(masked_background)
+        self._display_bgr(self.current_image_bgr)
         contrast = profile_class["contrast_rgb"]
         self.status_var.set(
             f"Confirmed {class_name}. RGB contrast: {contrast}. "
-            "Showing the masked background."
+            "The source image remains available for another class."
         )
 
     def edit_selected_class(self):
@@ -519,13 +547,19 @@ class ScanProfilePanel:
             self.selected_class_index = None
             self.editing_class_index = None
             self._set_class_editing_enabled(False)
-            self._clear_pending_image()
+            self._clear_region_selection()
             self.class_name_var.set("")
             self.minimum_size_var.set("")
             self.maximum_size_var.set("")
             self._refresh_class_list()
-            self.status_var.set("Cancelled the unconfirmed class.")
-            self.app.display_image_message("Select a class or create a new class.")
+            if self.current_image_bgr is not None:
+                self._display_bgr(self.current_image_bgr)
+                self.status_var.set(
+                    "Cancelled the class. The current source image remains available."
+                )
+            else:
+                self.status_var.set("Cancelled the unconfirmed class.")
+                self.app.display_image_message("Select a class or create a new class.")
             return
 
         removed = self.scan_profile.remove_class(index)
@@ -548,15 +582,25 @@ class ScanProfilePanel:
         self.selected_class_index = None
         self.editing_class_index = None
         self.pending_new_class = True
-        self.threshold_var.set("5")
+        self.threshold_var.set(str(self.DEFAULT_FLOOD_FILL_TOLERANCE))
         self.minimum_size_var.set("")
         self.maximum_size_var.set("")
-        self._clear_pending_image()
+        source_available = (
+            self.current_source_path is not None
+            and self.current_image_bgr is not None
+        )
+        self._clear_region_selection()
         self._set_class_editing_enabled(True)
         self.class_name_var.set(self._next_default_class_name())
         self._refresh_class_list(select_pending=True)
-        self.status_var.set("Load an image for the new class.")
-        self.app.display_image_message("Open an image to create this class.")
+        if source_available:
+            self._display_bgr(self.current_image_bgr)
+            self.status_var.set(
+                "Using the current source image. Click a flake or load another image."
+            )
+        else:
+            self.status_var.set("Load an image for the new class.")
+            self.app.display_image_message("Open an image to create this class.")
         self.class_name_entry.focus_set()
 
     def save_profile(self):
@@ -631,9 +675,17 @@ class ScanProfilePanel:
             self.status_var.set("No region was found. Try another point or tolerance.")
             return
 
+        try:
+            contrast = region_contrast_rgb(self.current_image_bgr, region_mask)
+        except ValueError as exc:
+            messagebox.showerror("Contrast Error", str(exc))
+            return
+
         self.current_seed_point = seed_point
         self.current_region_mask = region_mask
         self.current_threshold = threshold
+        self.current_contrast_rgb = contrast
+        self._set_contrast_display(contrast)
         preview = build_region_overlay(
             self.current_image_bgr,
             region_mask,
@@ -666,7 +718,13 @@ class ScanProfilePanel:
             self._updating_class_list = True
             try:
                 self.class_list.delete(previous_index)
-                self.class_list.insert(previous_index, f"  {previous_name}")
+                self.class_list.insert(
+                    previous_index,
+                    self._class_list_text(
+                        self.scan_profile.get_class(previous_index),
+                        name=previous_name,
+                    ),
+                )
                 self.class_list.selection_set(index)
                 self.class_list.activate(index)
             finally:
@@ -695,6 +753,8 @@ class ScanProfilePanel:
         self.current_region_mask = profile_class["region_mask"].copy()
         self.current_seed_point = profile_class["seed_point"]
         self.current_threshold = profile_class["threshold"]
+        self.current_contrast_rgb = profile_class["contrast_rgb"]
+        self._set_contrast_display(profile_class["contrast_rgb"])
         preview = build_region_overlay(
             self.current_image_bgr,
             self.current_region_mask,
@@ -747,6 +807,19 @@ class ScanProfilePanel:
     def _display_bgr(self, image_bgr: np.ndarray):
         self.app.display_image(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
 
+    def _set_contrast_display(self, contrast):
+        if contrast is None:
+            self.contrast_var.set("RGB contrast: —")
+            return
+        red, green, blue = contrast
+        self.contrast_var.set(f"RGB contrast: ({red}, {green}, {blue})")
+
+    @staticmethod
+    def _class_list_text(profile_class, name: str | None = None) -> str:
+        red, green, blue = profile_class["contrast_rgb"]
+        class_name = profile_class["name"] if name is None else name
+        return f"  {class_name} ({red}, {green}, {blue})"
+
     def _refresh_class_list(
         self,
         select_name: str | None = None,
@@ -758,7 +831,10 @@ class ScanProfilePanel:
         try:
             self.class_list.delete(0, tk.END)
             for profile_class in classes:
-                self.class_list.insert(tk.END, f"  {profile_class['name']}")
+                self.class_list.insert(
+                    tk.END,
+                    self._class_list_text(profile_class),
+                )
 
             if self.pending_new_class and self.mode in ("create", "edit"):
                 pending_name = self.class_name_var.get().strip() or "(unnamed class)"
@@ -831,10 +907,17 @@ class ScanProfilePanel:
             return
 
         display_name = self.class_name_var.get().strip() or "(unnamed class)"
+        if self.editing_class_index is not None:
+            display_name = self._class_list_text(
+                self.scan_profile.get_class(self.editing_class_index),
+                name=display_name,
+            )
+        else:
+            display_name = f"  {display_name}"
         self._updating_class_list = True
         try:
             self.class_list.delete(list_index)
-            self.class_list.insert(list_index, f"  {display_name}")
+            self.class_list.insert(list_index, display_name)
             self.class_list.selection_set(list_index)
             self.class_list.activate(list_index)
         finally:
@@ -853,6 +936,27 @@ class ScanProfilePanel:
 
     def _class_index_for_name(self, class_name: str) -> int | None:
         return self.scan_profile.find_class(class_name)
+
+    def _find_similar_class(self, contrast_rgb, exclude_index=None):
+        if contrast_rgb is None:
+            return None
+
+        candidate = np.asarray(contrast_rgb, dtype=np.float64)
+        closest_match = None
+        for index, profile_class in enumerate(self.scan_profile.classes):
+            if index == exclude_index:
+                continue
+            class_contrast = np.asarray(
+                profile_class["contrast_rgb"],
+                dtype=np.float64,
+            )
+            distance = float(np.linalg.norm(candidate - class_contrast))
+            if distance > self.SIMILAR_CLASS_CONTRAST_DISTANCE:
+                continue
+            if closest_match is None or distance < closest_match[1]:
+                closest_match = (profile_class, distance)
+
+        return closest_match
 
     def _next_default_class_name(self) -> str:
         existing_names = {
@@ -881,6 +985,11 @@ class ScanProfilePanel:
     def _clear_pending_image(self):
         self.current_source_path = None
         self.current_image_bgr = None
+        self._clear_region_selection()
+
+    def _clear_region_selection(self):
         self.current_region_mask = None
         self.current_seed_point = None
         self.current_threshold = None
+        self.current_contrast_rgb = None
+        self._set_contrast_display(None)

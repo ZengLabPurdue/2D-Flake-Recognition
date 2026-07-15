@@ -1,8 +1,11 @@
-from tkinter import Frame, Label
+from tkinter import Frame, Label, messagebox
+from tkinter import ttk
 
 class ScanStatusPanel:
-    def __init__(self, parent):
+    def __init__(self, parent, root=None):
         self.parent = parent
+        self.root = root or parent.winfo_toplevel()
+        self.stop_callback = None
         self.frame = self._build_panel()
 
     def _build_panel(self):
@@ -10,7 +13,7 @@ class ScanStatusPanel:
             self.parent,
             bg="#f0f0f0",
             width=204,
-            height=147
+            height=183
         )
         panel.place(relx=1.0, rely=0.0, anchor="ne")
 
@@ -18,13 +21,13 @@ class ScanStatusPanel:
             panel,
             bg="white",
             width=200,
-            height=145
+            height=181
         )
         background.place(x=2, y=0)
 
         title_label = Label(
             panel,
-            text="Status",
+            text="Scan Info",
             bg="white",
             fg="black",
             font=("TkDefaultFont", 13)
@@ -71,7 +74,48 @@ class ScanStatusPanel:
         )
         self.total_time_label.place(relx=0.5, y=115, anchor="n")
 
+        style = ttk.Style()
+        style.configure(
+            "Normal.TButton",
+            font="TkDefaultFont",
+            background="white",
+            relief="flat",
+        )
+
+        self.stop_button = ttk.Button(
+            panel,
+            text="Stop Scan",
+            command=self._request_stop,
+            style="Normal.TButton",
+        )
+        self.stop_button.place(relx=0.5, y=145, anchor="n")
+        self.stop_button.state(["disabled"])
+
         return panel
+
+    def set_stop_callback(self, callback):
+        self.stop_callback = callback
+
+    def set_scan_running(self, running):
+        if running:
+            self.stop_button.configure(text="Stop Scan")
+            self.stop_button.state(["!disabled"])
+        else:
+            self.stop_button.configure(text="Stop Scan")
+            self.stop_button.state(["disabled"])
+
+    def _request_stop(self):
+        if self.stop_callback is None:
+            return
+        if not messagebox.askyesno(
+            "Stop Scan",
+            "Stop the scan after the current stage movement or image capture finishes?",
+            parent=self.root,
+        ):
+            return
+        self.stop_button.configure(text="Stopping...")
+        self.stop_button.state(["disabled"])
+        self.stop_callback()
 
     def update_status(
         self,

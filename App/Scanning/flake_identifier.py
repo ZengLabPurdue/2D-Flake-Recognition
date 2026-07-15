@@ -43,7 +43,9 @@ class Flake_Identifier():
     def identify_flakes_color_model(self, image, output=False):
         start_time = time.time()
         masked_image_bgr, contours = contour_finder.find_flakes(
-            cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            cv2.cvtColor(image, cv2.COLOR_RGB2BGR),
+            area_threshold=500,
+            legacy_mask=True,
         )
         masked_image = cv2.cvtColor(masked_image_bgr, cv2.COLOR_BGR2RGB)
 
@@ -269,7 +271,9 @@ class Flake_Identifier():
     def find_flakes(self, image, output=False):
 
         _, contours = contour_finder.find_flakes(
-            cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            cv2.cvtColor(image, cv2.COLOR_RGB2BGR),
+            area_threshold=500,
+            legacy_mask=True,
         )
 
         return contours

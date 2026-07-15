@@ -150,7 +150,7 @@ class FocusController:
             f"Search: {z_start:.1f} to {z_end:.1f}"
         )
 
-        def find_peak(peak_found_threshold=100):
+        def find_peak(peak_found_threshold=100, stop_after_drop=True):
 
             peak_found = False
             best_sharpness = None
@@ -203,7 +203,7 @@ class FocusController:
                     f"Time: {elapsed_ms:>8.2f}ms"
                 )
 
-                if peak_found and sharpness < best_sharpness - peak_found_threshold:
+                if stop_after_drop and sharpness < best_sharpness - peak_found_threshold:
                     print("Peak passed, stopping Z motion")
                     self.stage.stop_z()
                     self.stage.wait_until_not_busy()
@@ -213,18 +213,33 @@ class FocusController:
 
         self.stage.move_to_z(z_start, wait=False)
 
-        peak_found, best_sharpness, best_z = find_peak(peak_found_threshold)
-        
-        if not peak_found:
+        _, best_sharpness, best_z = find_peak(peak_found_threshold)
 
-            if self.stop_focus_event.is_set():
-                self.stage.set_z_velocity(default_z_velo)
-                self.stage.set_z_acceleration(default_z_accel)
-                return current_z
+        if self.stop_focus_event.is_set():
+            self.stage.set_z_velocity(default_z_velo)
+            self.stage.set_z_acceleration(default_z_accel)
+            return current_z
 
-            self.stage.move_to_z(z_end, wait=False)
+        self.stage.move_to_z(z_end, wait=False)
 
-            peak_found, best_sharpness, best_z = find_peak(peak_found_threshold)
+        _, upward_best_sharpness, upward_best_z = find_peak(
+            peak_found_threshold,
+            stop_after_drop=False,
+        )
+        if (
+            upward_best_sharpness is not None
+            and (
+                best_sharpness is None
+                or upward_best_sharpness > best_sharpness
+            )
+        ):
+            best_sharpness = upward_best_sharpness
+            best_z = upward_best_z
+
+        if self.stop_focus_event.is_set():
+            self.stage.set_z_velocity(default_z_velo)
+            self.stage.set_z_acceleration(default_z_accel)
+            return current_z
 
         if best_sharpness is None or best_z is None or best_sharpness < 0:
             print("No valid focus frames found")

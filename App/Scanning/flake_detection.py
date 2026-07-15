@@ -8,44 +8,48 @@ class Flake_Detector:
         
         self.flake_identifier = Flake_Identifier()
 
-    def flake_detection(self, image_queue, frame_processor):
+    def flake_detection(
+        self,
+        image_queue,
+        frame_processor,
+        stop_requested=None,
+    ):
         while True:
             img_path = image_queue.get()
+            try:
+                if img_path is None:
+                    break
+                if stop_requested is not None and stop_requested():
+                    continue
 
-            if img_path is None:
-                break
-            else:
                 print(img_path)
+                img = cv2.imread(str(img_path))
+                if img is None:
+                    continue
+                vignette_applied = image_metadata.is_vignette_corrected(img_path)
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-            img = cv2.imread(str(img_path))
-            if img is None:
-                continue
-            vignette_applied = image_metadata.is_vignette_corrected(img_path)
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-            scanned_img, _, save = self.flake_identifier.identify_flakes_flake_model(img)
-
-            out_path = img_path.parent.parent / "Processed" / img_path.name
-
-            frame_processor.save_image(
-                cv2.cvtColor(scanned_img, cv2.COLOR_RGB2BGR),
-                save_dir=out_path.parent,
-                filename=out_path.name,
-                vignette_applied=vignette_applied,
-            )
-
-            if save:
-                chip_folder = img_path.parent.parent
-                scan_root = chip_folder.parent.parent.parent
-
-                flakes_dir = scan_root / "Flakes Found" / chip_folder.name
-                flakes_dir.mkdir(parents=True, exist_ok=True)
-
+                scanned_img, _, save = (
+                    self.flake_identifier.identify_flakes_flake_model(img)
+                )
+                out_path = img_path.parent.parent / "Processed" / img_path.name
                 frame_processor.save_image(
                     cv2.cvtColor(scanned_img, cv2.COLOR_RGB2BGR),
-                    save_dir=flakes_dir,
-                    filename=img_path.name,
+                    save_dir=out_path.parent,
+                    filename=out_path.name,
                     vignette_applied=vignette_applied,
                 )
 
-            image_queue.task_done()
+                if save:
+                    chip_folder = img_path.parent.parent
+                    scan_root = chip_folder.parent.parent.parent
+                    flakes_dir = scan_root / "Flakes Found" / chip_folder.name
+                    flakes_dir.mkdir(parents=True, exist_ok=True)
+                    frame_processor.save_image(
+                        cv2.cvtColor(scanned_img, cv2.COLOR_RGB2BGR),
+                        save_dir=flakes_dir,
+                        filename=img_path.name,
+                        vignette_applied=vignette_applied,
+                    )
+            finally:
+                image_queue.task_done()

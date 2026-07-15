@@ -24,6 +24,7 @@ class Mapper:
         self.turret_controller = turret_controller
         self.frame_processor = frame_processor
         self.update_scan_status = update_scan_status
+        self.scan_running = False
 
     def initialize_2x_mapping(self):
 
@@ -318,6 +319,7 @@ class Mapper:
         save_dir=None,
         full_scan=False,
         full_scan_start_time=None,
+        check_cancelled=None,
     ):
         if len(window) != 2 or window[0] < 1 or window[1] < 1:
             raise ValueError("Mapping window dimensions must both be positive.")
@@ -349,6 +351,8 @@ class Mapper:
         zoom = minimum_zoom if full_zoom else max(zoom, minimum_zoom)
 
         try:
+            if check_cancelled is not None:
+                check_cancelled()
             self.app.set_view("Map", True)
             self.initialize_2x_mapping()
 
@@ -381,6 +385,8 @@ class Mapper:
             print(f"Generated {total_frames} coordinates for mapping: {coords}")
 
             for i, (offset_x, offset_y) in enumerate(coords, start=1):
+                if check_cancelled is not None:
+                    check_cancelled()
                 resolution = self.app.get_resolution()
                 target_x = center_x + (
                     offset_x
@@ -438,6 +444,8 @@ class Mapper:
                     status["stage"] = "2x Scan"
                 self.update_scan_status(**status)
                 self.root.update()
+                if check_cancelled is not None:
+                    check_cancelled()
 
             if save_dir is not None:
                 map_bgr = cv2.cvtColor(self.app.get_true_map(), cv2.COLOR_RGB2BGR)
