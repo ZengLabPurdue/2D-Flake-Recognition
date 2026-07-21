@@ -489,6 +489,7 @@ def find_flakes(
             region_classifier.draw_class_legend,
             classified_without_legend,
             profile_classes,
+            classification["region_results"],
         )
         if draw_legend
         else classified_without_legend

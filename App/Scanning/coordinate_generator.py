@@ -53,7 +53,7 @@ def generate_spiral_coords(length):
 
 def generate_10x_scan_coordinates(
     app,
-    wafers,
+    chips,
     scan_center_x,
     scan_center_y,
     scale,
@@ -68,8 +68,8 @@ def generate_10x_scan_coordinates(
 
     scan_coordinates_10x = []
 
-    for wafer in wafers:
-        x, y, w, h = wafer
+    for chip in chips:
+        x, y, w, h = chip
 
         num_windows_x = math.ceil(w / window_w)
         num_windows_y = math.ceil(h / window_h)
@@ -77,19 +77,19 @@ def generate_10x_scan_coordinates(
         grid_w = num_windows_x * window_w
         grid_h = num_windows_y * window_h
 
-        wafer_center_x = x + w // 2
-        wafer_center_y = y + h // 2
+        chip_center_x = x + w // 2
+        chip_center_y = y + h // 2
 
-        start_x = max(0, wafer_center_x - grid_w // 2)
-        start_y = max(0, wafer_center_y - grid_h // 2)
+        start_x = max(0, chip_center_x - grid_w // 2)
+        start_y = max(0, chip_center_y - grid_h // 2)
 
-        start_pos_x = -(wafer_center_x - true_map.shape[1] / 2) * (PIXEL_SIZE["2X"][resolution] * RESOLUTION_DIM[resolution]["x"] * CROP_RATIO["2X"]["x"]) / (camera_width / scale * CROP_RATIO["2X"]["x"]) + scan_center_x
-        start_pos_y = -(wafer_center_y - true_map.shape[0] / 2) * (PIXEL_SIZE["2X"][resolution] * RESOLUTION_DIM[resolution]["y"] * CROP_RATIO["2X"]["y"]) / (camera_height / scale * CROP_RATIO["2X"]["y"]) + scan_center_y
+        start_pos_x = -(chip_center_x - true_map.shape[1] / 2) * (PIXEL_SIZE["2X"][resolution] * RESOLUTION_DIM[resolution]["x"] * CROP_RATIO["2X"]["x"]) / (camera_width / scale * CROP_RATIO["2X"]["x"]) + scan_center_x
+        start_pos_y = -(chip_center_y - true_map.shape[0] / 2) * (PIXEL_SIZE["2X"][resolution] * RESOLUTION_DIM[resolution]["y"] * CROP_RATIO["2X"]["y"]) / (camera_height / scale * CROP_RATIO["2X"]["y"]) + scan_center_y
 
         scan_coordinates_10x.append([int(start_pos_x), int(start_pos_y), num_windows_x, num_windows_y,])
 
         print(f"Scan Start: ({scan_center_x}, {scan_center_y})")
-        print(f"Wafer Center: ({start_pos_x}, {start_pos_y})")
+        print(f"Chip Center: ({start_pos_x}, {start_pos_y})")
         print(f"Windows: ({num_windows_x}, {num_windows_y})")
 
         for i in range(num_windows_x):
@@ -99,7 +99,7 @@ def generate_10x_scan_coordinates(
 
                 cv2.rectangle(true_map, (wx, wy), (wx + window_w, wy + window_h), (0, 255, 0), 5, cv2.LINE_AA)
 
-        cv2.circle(true_map, (wafer_center_x, wafer_center_y), 8, (0, 0, 255), -1, cv2.LINE_AA)
+        cv2.circle(true_map, (chip_center_x, chip_center_y), 8, (0, 0, 255), -1, cv2.LINE_AA)
         cv2.circle(true_map, (int(true_map.shape[1] / 2), int(true_map.shape[0] / 2)), 8, (255, 0, 0), -1, cv2.LINE_AA)
 
         true_map_bgr = cv2.cvtColor(true_map, cv2.COLOR_RGB2BGR)
@@ -109,7 +109,7 @@ def generate_10x_scan_coordinates(
     
 def generate_20x_scan_coordinates(
     app,
-    wafers,
+    chips,
     scan_center_x,
     scan_center_y,
     scale,
@@ -124,8 +124,8 @@ def generate_20x_scan_coordinates(
 
     scan_coordinates_20x = []
 
-    for wafer in wafers:
-        x, y, w, h = wafer
+    for chip in chips:
+        x, y, w, h = chip
 
         num_windows_x = math.ceil(w / window_w)
         num_windows_y = math.ceil(h / window_h)
@@ -133,19 +133,19 @@ def generate_20x_scan_coordinates(
         grid_w = num_windows_x * window_w
         grid_h = num_windows_y * window_h
 
-        wafer_center_x = x + w // 2
-        wafer_center_y = y + h // 2
+        chip_center_x = x + w // 2
+        chip_center_y = y + h // 2
 
-        start_x = max(0, wafer_center_x - grid_w // 2)
-        start_y = max(0, wafer_center_y - grid_h // 2)
+        start_x = max(0, chip_center_x - grid_w // 2)
+        start_y = max(0, chip_center_y - grid_h // 2)
 
-        start_pos_x = (wafer_center_x - true_map.shape[1] / 2) * (PIXEL_SIZE["2X"][resolution] * RESOLUTION_DIM[resolution]["x"] * CROP_RATIO["2X"]["x"]) / (camera_width / scale * CROP_RATIO["2X"]["x"]) + scan_center_x
-        start_pos_y = -(wafer_center_y - true_map.shape[0] / 2) * (PIXEL_SIZE["2X"][resolution] * RESOLUTION_DIM[resolution]["y"] * CROP_RATIO["2X"]["y"]) / (camera_height / scale * CROP_RATIO["2X"]["y"]) + scan_center_y
+        start_pos_x = (chip_center_x - true_map.shape[1] / 2) * (PIXEL_SIZE["2X"][resolution] * RESOLUTION_DIM[resolution]["x"] * CROP_RATIO["2X"]["x"]) / (camera_width / scale * CROP_RATIO["2X"]["x"]) + scan_center_x
+        start_pos_y = -(chip_center_y - true_map.shape[0] / 2) * (PIXEL_SIZE["2X"][resolution] * RESOLUTION_DIM[resolution]["y"] * CROP_RATIO["2X"]["y"]) / (camera_height / scale * CROP_RATIO["2X"]["y"]) + scan_center_y
 
         scan_coordinates_20x.append([int(start_pos_x), int(start_pos_y), num_windows_x, num_windows_y,])
 
         print(f"Scan Start: ({scan_center_x}, {scan_center_y})")
-        print(f"Wafer Center: ({start_pos_x}, {start_pos_y})")
+        print(f"Chip Center: ({start_pos_x}, {start_pos_y})")
         print(f"Windows: ({num_windows_x}, {num_windows_y})")
 
         for i in range(num_windows_x):
@@ -155,7 +155,7 @@ def generate_20x_scan_coordinates(
 
                 cv2.rectangle(true_map, (wx, wy), (wx + window_w, wy + window_h), (0, 255, 0), 5, cv2.LINE_AA)
 
-        cv2.circle(true_map, (wafer_center_x, wafer_center_y), 8, (0, 0, 255), -1, cv2.LINE_AA)
+        cv2.circle(true_map, (chip_center_x, chip_center_y), 8, (0, 0, 255), -1, cv2.LINE_AA)
         cv2.circle(true_map, (int(true_map.shape[1] / 2), int(true_map.shape[0] / 2)), 8, (255, 0, 0), -1, cv2.LINE_AA)
 
         true_map_bgr = cv2.cvtColor(true_map, cv2.COLOR_RGB2BGR)

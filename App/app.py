@@ -1,5 +1,6 @@
 import os
 import sys
+import threading
 
 import cv2
 import numpy as np
@@ -45,14 +46,32 @@ class App:
 
         self.true_map = np.zeros((6000, 6000, 3), dtype=np.uint8)
         self.filter_map = np.zeros((6000, 6000), dtype=np.uint8)
+        self.region_map = np.zeros((6000, 6000, 3), dtype=np.uint8)
+        self.region_map_id = None
+        self._region_map_lock = threading.Lock()
 
         self.img_label = Label(self.main_frame, bg="#f0f0f0")
         self.img_label.pack(fill=BOTH, expand=True)
 
         self.live_mapping_var = tk.BooleanVar(value=False)
         self.map_chip_filter_var = tk.BooleanVar(value=False)
+        self.region_map_view_var = tk.BooleanVar(value=False)
+        self.region_map_available = False
         self.camera_chip_filter_var = tk.BooleanVar(value=False)
         self.camera_vignette_filter_var = tk.BooleanVar(value=False)
+        self.region_map_toggle = tk.Checkbutton(
+            self.main_frame,
+            text="Segmented Map",
+            variable=self.region_map_view_var,
+            command=self.toggle_region_map_view,
+            bg="white",
+            activebackground="white",
+            selectcolor="white",
+            relief="solid",
+            borderwidth=1,
+            padx=8,
+            pady=4,
+        )
         self.view_mode = None
         self.set_view("Camera View")
 
@@ -276,7 +295,7 @@ class App:
         map_menu.add_checkbutton(
             label="Chip Filter",
             variable=self.map_chip_filter_var,
-            command=lambda: self.set_view("Map"),
+            command=self.toggle_map_chip_filter,
         )
 
         camera_menu = Menu(view_menu, tearoff=0)
@@ -337,7 +356,11 @@ class App:
     # ------------- Display Functions -------------
 
     def display_map(self):
-        if self.map_chip_filter_var.get():
+        if self.region_map_available and self.region_map_view_var.get():
+            with self._region_map_lock:
+                map_data = self.region_map.copy()
+            self.map_image = Image.fromarray(map_data)
+        elif self.map_chip_filter_var.get():
             self.map_image = Image.fromarray(self.filter_map.astype(np.uint8))
         else:
             self.map_image = Image.fromarray(self.true_map.astype(np.uint8))
@@ -559,6 +582,7 @@ class App:
             self.img_label.pack(fill=BOTH, expand=True)
             self.map_canvas.pack_forget() # Hide map canvas
 
+        self._update_region_map_toggle_visibility()
         self.root.update_idletasks()
 
     def get_live_mapping(self):
@@ -582,6 +606,80 @@ class App:
 
     def get_map_chip_filter(self):
         return self.map_chip_filter_var.get()
+
+    def toggle_map_chip_filter(self):
+        if self.map_chip_filter_var.get():
+            self.region_map_view_var.set(False)
+        self.set_view("Map")
+
+    def toggle_region_map_view(self):
+        if self.region_map_view_var.get():
+            self.map_chip_filter_var.set(False)
+        self.set_view("Map")
+
+    def _update_region_map_toggle_visibility(self):
+        if self.region_map_available and self.view_mode == "Map":
+            self.region_map_toggle.place(
+                x=12,
+                y=12,
+                anchor="nw",
+            )
+            self.region_map_toggle.lift()
+        else:
+            self.region_map_toggle.place_forget()
+
+    def set_region_map_available(self, available):
+        self.region_map_available = bool(available)
+        if not self.region_map_available:
+            self.region_map_view_var.set(False)
+        self._update_region_map_toggle_visibility()
+        if self.view_mode == "Map":
+            self.display_map()
+
+    def get_region_map_view(self):
+        return self.region_map_available and self.region_map_view_var.get()
+
+    def reset_region_map(self, map_id, shape):
+        with self._region_map_lock:
+            self.region_map = np.zeros(shape, dtype=np.uint8)
+            self.region_map_id = map_id
+        if self.get_region_map_view() and self.view_mode == "Map":
+            self.display_map()
+
+    def place_region_map_frame(self, map_id, image_rgb, map_x, map_y, zoom):
+        if (
+            map_id is None
+            or image_rgb is None
+            or map_x is None
+            or map_y is None
+            or zoom is None
+        ):
+            return
+
+        step = max(1, int(round(float(zoom))))
+        image_small = image_rgb[::step, ::step]
+        map_x = int(map_x)
+        map_y = int(map_y)
+
+        with self._region_map_lock:
+            if map_id != self.region_map_id:
+                return
+            map_height, map_width = self.region_map.shape[:2]
+            x_start = max(0, map_x)
+            y_start = max(0, map_y)
+            source_x = max(0, -map_x)
+            source_y = max(0, -map_y)
+            width = min(image_small.shape[1] - source_x, map_width - x_start)
+            height = min(image_small.shape[0] - source_y, map_height - y_start)
+            if width <= 0 or height <= 0:
+                return
+            self.region_map[
+                y_start:y_start + height,
+                x_start:x_start + width,
+            ] = image_small[
+                source_y:source_y + height,
+                source_x:source_x + width,
+            ]
 
     def get_camera_chip_filter(self):
         return self.camera_chip_filter_var.get()

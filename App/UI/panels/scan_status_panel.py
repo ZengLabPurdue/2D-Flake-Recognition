@@ -13,7 +13,7 @@ class ScanStatusPanel:
             self.parent,
             bg="#f0f0f0",
             width=204,
-            height=183
+            height=188
         )
         panel.place(relx=1.0, rely=0.0, anchor="ne")
 
@@ -21,7 +21,7 @@ class ScanStatusPanel:
             panel,
             bg="white",
             width=200,
-            height=181
+            height=186
         )
         background.place(x=2, y=0)
 

@@ -14,13 +14,15 @@ class ScanSetupPanel:
         "2x Scan",
         "10x Scan",
         "20x Scan",
+        "100x Scan",
         "Vignette Filter",
     )
     FULL_SCAN_TYPES = {"Complete Scan (1 Chip)", "Full Stage Scan"}
+    DETECTION_SCAN_TYPES = FULL_SCAN_TYPES | {"100x Scan"}
     MATERIALS = ("Gr", "hBN", "MoS2", "MoTe2", "WS2", "WSe2")
     SUBSTRATE_THICKNESSES = ("100nm", "285nm")
     FULL_SCAN_MAGNIFICATIONS = ("10x", "20x")
-    DETECTION_MODELS = ("Flake Detection", "Region Detection")
+    DETECTION_MODELS = ("Region Detection", "Flake Detection")
 
     DEFAULT_MATERIAL = "Gr"
     DEFAULT_SUBSTRATE = "285nm"
@@ -40,9 +42,8 @@ class ScanSetupPanel:
         self.full_scan_magnification_var = tk.StringVar(
             value=self.FULL_SCAN_MAGNIFICATIONS[0]
         )
-        self.detection_model_var = tk.StringVar(value=self.DETECTION_MODELS[0])
+        self.detection_model_var = tk.StringVar(value="Region Detection")
         self.profile_name_var = tk.StringVar(value="Profile: loading default...")
-        self.model_note_var = tk.StringVar(value="")
 
         self.frame = self._build_panel()
         self._show_controls_for_scan_type()
@@ -237,15 +238,10 @@ class ScanSetupPanel:
             style="Normal.TButton",
             command=self._choose_and_load_profile,
         )
-        self.model_note_label = Label(
-            self.full_scan_controls,
-            textvariable=self.model_note_var,
-            bg="white",
-            fg="#666666",
-            justify="center",
-            wraplength=184,
-        )
+
     def show(self):
+        self.app.set_view("Camera View")
+
         if self.scan_manager.is_scan_running():
             self.app.close_all_panels()
             self.app.open_panel("Scan Info Panel")
@@ -261,7 +257,7 @@ class ScanSetupPanel:
         self.window_controls.place_forget()
         self.full_scan_controls.place_forget()
 
-        if scan_type in self.FULL_SCAN_TYPES:
+        if scan_type in self.DETECTION_SCAN_TYPES:
             self.full_scan_controls.place(relx=0.5, y=102, anchor="n")
         else:
             default_window = self.scan_manager.DEFAULT_WINDOWS[scan_type]
@@ -277,23 +273,19 @@ class ScanSetupPanel:
 
     def _on_detection_model_changed(self, event=None):
         region_selected = self.detection_model_var.get() == "Region Detection"
-        full_scan_selected = self.scan_type_var.get() in self.FULL_SCAN_TYPES
+        full_scan_selected = self.scan_type_var.get() in self.DETECTION_SCAN_TYPES
         self.profile_label.place_forget()
         self.load_profile_button.place_forget()
-        self.model_note_label.place_forget()
 
         if region_selected and full_scan_selected:
             self.profile_label.place(relx=0.5, y=221, anchor="n", width=184)
-            self.load_profile_button.place(relx=0.5, y=260, anchor="n")
-            self.model_note_label.place(relx=0.5, y=297, anchor="n", width=184)
-            self.model_note_var.set("Region detection is not connected yet.")
-            self.run_button.state(["disabled"])
-            self.full_scan_controls.configure(height=340)
-            self.frame.configure(height=480)
-            self.background.configure(height=478)
-            self.run_button.place(relx=0.5, y=439, anchor="n")
+            self.load_profile_button.place(relx=0.5, y=255, anchor="n")
+            self.run_button.state(["!disabled"])
+            self.full_scan_controls.configure(height=280)
+            self.frame.configure(height=440)
+            self.background.configure(height=438)
+            self.run_button.place(relx=0.5, y=399, anchor="n")
         else:
-            self.model_note_var.set("")
             self.run_button.state(["!disabled"])
             if full_scan_selected:
                 self.full_scan_controls.configure(height=230)
@@ -308,8 +300,10 @@ class ScanSetupPanel:
         scan_type = self.scan_type_var.get()
         options = {"scan_type": scan_type}
 
-        if scan_type in self.FULL_SCAN_TYPES:
+        if scan_type in self.DETECTION_SCAN_TYPES:
             if (
+                scan_type in self.FULL_SCAN_TYPES
+                and
                 self.material_var.get() == self.DEFAULT_MATERIAL
                 and self.substrate_var.get() == self.DEFAULT_SUBSTRATE
             ):
@@ -324,22 +318,27 @@ class ScanSetupPanel:
                 if not confirmed:
                     return
 
-            if self.detection_model_var.get() == "Region Detection":
-                messagebox.showinfo(
-                    "Region Detection Unavailable",
-                    "Region detection is not connected yet. Select Flake Detection to run.",
+            profile = self.app.get_active_scan_profile()
+            if (
+                self.detection_model_var.get() == "Region Detection"
+                and (profile is None or getattr(profile, "path", None) is None)
+            ):
+                messagebox.showwarning(
+                    "Scan Profile Required",
+                    "Load a scan profile before running Region Detection.",
                     parent=self.root,
                 )
                 return
-
-            profile = self.app.get_active_scan_profile()
             options.update({
-                "material": self.material_var.get(),
-                "substrate_thickness": self.substrate_var.get(),
-                "full_scan_magnification": self.full_scan_magnification_var.get(),
                 "detection_model": self.detection_model_var.get(),
                 "scan_profile": profile,
             })
+            if scan_type in self.FULL_SCAN_TYPES:
+                options.update({
+                    "material": self.material_var.get(),
+                    "substrate_thickness": self.substrate_var.get(),
+                    "full_scan_magnification": self.full_scan_magnification_var.get(),
+                })
         else:
             try:
                 options["window"] = self._get_window()

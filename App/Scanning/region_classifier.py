@@ -2,17 +2,19 @@
 
 import colorsys
 import json
+import re
 from pathlib import Path
 from time import perf_counter
 
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 
 DEFAULT_CONTRAST_MATCH_THRESHOLD = 3
 DEFAULT_REGION_FLOOD_FILL_THRESHOLD = 10
-CLASS_COLOR_SATURATION = 0.82
-CLASS_COLOR_LIGHTNESS = 0.68
+CLASS_COLOR_SATURATION = 0.58
+CLASS_COLOR_LIGHTNESS = 0.72
 
 
 def _timed_call(stats, name, function, *args):
@@ -138,14 +140,20 @@ def match_profile_class(contrast_rgb, profile_classes):
 
 
 def generate_class_colors(profile_classes, color_seed=None):
-    """Generate light class colors with equidistant hues."""
+    """Generate randomly assigned soft class colors with well-spaced hues."""
     if not profile_classes:
         return {}
-    hue_offset = float(np.random.default_rng(color_seed).random())
+    random = np.random.default_rng(color_seed)
+    hue_offset = float(random.random())
     hue_step = 1.0 / len(profile_classes)
+    hues = np.asarray([
+        (hue_offset + index * hue_step) % 1.0
+        for index in range(len(profile_classes))
+    ])
+    random.shuffle(hues)
     colors = {}
     for index, profile_class in enumerate(profile_classes):
-        hue = (hue_offset + index * hue_step) % 1.0
+        hue = float(hues[index])
         rgb = colorsys.hls_to_rgb(
             hue,
             CLASS_COLOR_LIGHTNESS,
@@ -322,6 +330,14 @@ def classify_contour_regions(
             if pixel_count == 0:
                 continue
 
+            region_y, region_x = np.nonzero(region_mask)
+            bounding_box = {
+                "x": int(x1 + region_x.min()),
+                "y": int(y1 + region_y.min()),
+                "width": int(region_x.max() - region_x.min() + 1),
+                "height": int(region_y.max() - region_y.min() + 1),
+            }
+
             depth_difference = component["raw_depth"] - outer_depth
             nesting_depth = max(0, (depth_difference + 1) // 2)
             region_type = "external" if nesting_depth == 0 else "internal"
@@ -376,6 +392,7 @@ def classify_contour_regions(
                     tuple(float(value) for value in match[2]) if match else None
                 ),
                 "pixel_count": pixel_count,
+                "bounding_box": bounding_box,
             })
 
     class_index_map = np.zeros((height, width), dtype=np.int32)
@@ -415,32 +432,77 @@ def create_classified_image(image_shape, external_mask, class_index_map, profile
     return image
 
 
-def draw_class_legend(image_rgb, profile_classes):
-    """Draw large class-colored names in the upper-left corner."""
+def _load_class_legend_font(font_size):
+    """Load a crisp Git Bash-style monospace font with portable fallbacks."""
+    font_candidates = (
+        Path("C:/Windows/Fonts/lucon.ttf"),
+        Path("C:/Windows/Fonts/consola.ttf"),
+    )
+    for font_path in font_candidates:
+        if font_path.is_file():
+            return ImageFont.truetype(str(font_path), font_size)
+    for font_name in ("DejaVuSansMono.ttf", "LiberationMono-Regular.ttf"):
+        try:
+            return ImageFont.truetype(font_name, font_size)
+        except OSError:
+            continue
+    return ImageFont.load_default(size=font_size)
+
+
+def draw_class_legend(image_rgb, profile_classes, region_results=None):
+    """Draw a compact monospace legend linked to each matching region."""
     if not profile_classes:
         return image_rgb.copy()
-    result = image_rgb.copy()
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    scale = max(0.75, min(result.shape[:2]) / 900.0)
-    thickness = max(2, int(round(scale * 2)))
-    line_height = max(30, int(round(38 * scale)))
+
+    result = Image.fromarray(image_rgb.copy())
+    draw = ImageDraw.Draw(result)
+    scale = max(1.0, min(image_rgb.shape[:2]) / 700.0)
+    font_size = max(14, int(round(18 * scale)))
+    font = _load_class_legend_font(font_size)
+    line_height = max(16, int(round(font_size * 1.15)))
+    line_width = max(1, int(round(scale / 2)))
     x = max(10, int(round(14 * scale)))
-    y = max(line_height, int(round(32 * scale)))
+    y = max(8, int(round(12 * scale)))
+
+    regions_by_class = {}
+    for region in region_results or ():
+        class_name = region.get("matched_class")
+        bounding_box = region.get("bounding_box")
+        if class_name is None or not bounding_box:
+            continue
+        center = (
+            int(round(bounding_box["x"] + bounding_box["width"] / 2)),
+            int(round(bounding_box["y"] + bounding_box["height"] / 2)),
+        )
+        regions_by_class.setdefault(class_name, []).append(center)
+
+    label_layout = []
     for index, profile_class in enumerate(profile_classes):
         text_y = y + index * line_height
-        if text_y >= result.shape[0] - 5:
+        if text_y + font_size >= image_rgb.shape[0] - 5:
             break
-        cv2.putText(
-            result,
-            profile_class["name"],
-            (x, text_y),
-            font,
-            scale,
-            profile_class["display_color_rgb"],
-            thickness,
-            cv2.LINE_AA,
+        class_name = profile_class["name"]
+        color = tuple(int(channel) for channel in profile_class["display_color_rgb"])
+        display_name = re.sub(r"\bclass\b", "Class", class_name, flags=re.IGNORECASE)
+        text_bounds = draw.textbbox((x, text_y), display_name, font=font)
+        line_start = (
+            text_bounds[2] + max(4, int(round(5 * scale))),
+            (text_bounds[1] + text_bounds[3]) // 2,
         )
-    return result
+        label_layout.append((class_name, display_name, color, text_y, line_start))
+
+    for class_name, _, color, _, line_start in label_layout:
+        for region_center in regions_by_class.get(class_name, ()):
+            draw.line(
+                (line_start, region_center),
+                fill=color,
+                width=line_width,
+            )
+
+    for _, display_name, color, text_y, _ in label_layout:
+        draw.text((x, text_y), display_name, font=font, fill=color)
+
+    return np.asarray(result).copy()
 
 
 def _seed_inside_contour(contour, allowed_mask):

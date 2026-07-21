@@ -78,7 +78,7 @@ class ViewScansPanel:
             textvariable=self.chip_var,
             state="readonly"
         )
-        self.chip_dropdown.place(relx=0.5, y=self.pos_chip, anchor="n")
+        self.chip_dropdown.place(relx=0.5, y=self.pos_chip, anchor="n", width=184)
 
         self.image_var = tk.StringVar(value="Image: None")
 
@@ -172,7 +172,7 @@ class ViewScansPanel:
         shift = 0 if display else -40
 
         if display:
-            self.chip_dropdown.place(relx=0.5, y=self.pos_chip, anchor="n")
+            self.chip_dropdown.place(relx=0.5, y=self.pos_chip, anchor="n", width=184)
         else:
             self.chip_dropdown.place_forget()
 

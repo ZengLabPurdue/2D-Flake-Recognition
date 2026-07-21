@@ -410,6 +410,7 @@ class FrameProcessor:
         apply_vignette=False,
         apply_chip_filter=False,
         vignette_applied=None,
+        metadata=None,
     ):
         if image is None:
             image = self.capture_frame_raw()
@@ -442,15 +443,17 @@ class FrameProcessor:
             filepath = save_dir / filename
 
         if filepath.suffix.lower() == ".png":
+            png_metadata = dict(metadata or {})
+            png_metadata.update({
+                "vignette_applied": bool(vignette_applied),
+                "chip_filter_applied": bool(apply_chip_filter),
+                "magnification": self.app.get_magnification(),
+                "resolution": self.app.get_resolution(),
+            })
             image_metadata.save_png(
                 filepath,
                 image,
-                metadata={
-                    "vignette_applied": bool(vignette_applied),
-                    "chip_filter_applied": bool(apply_chip_filter),
-                    "magnification": self.app.get_magnification(),
-                    "resolution": self.app.get_resolution(),
-                },
+                metadata=png_metadata,
             )
         elif not cv2.imwrite(str(filepath), image):
             raise OSError(f"OpenCV could not write the image to {filepath}")

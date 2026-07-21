@@ -151,7 +151,7 @@ class CameraSettingsPanel:
             width=18,
             font=("TkDefaultFont", 8),
         )
-        self.resolution_dropdown.place(relx=0.5, y=190, anchor="center")
+        self.resolution_dropdown.place(relx=0.5, y=190, anchor="center", width=184)
         self.resolution_dropdown.bind(
             "<<ComboboxSelected>>",
             self.change_resolution,

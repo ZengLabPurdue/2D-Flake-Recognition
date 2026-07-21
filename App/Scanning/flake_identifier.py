@@ -255,7 +255,10 @@ class Flake_Identifier():
                           color,
                           2)
         
-            flakes.append((class_id, (new_x, new_y, new_w, new_h)))
+            flakes.append((
+                class_id,
+                (new_x, new_y, new_x2 - new_x, new_y2 - new_y),
+            ))
         
         if output:
             print(f"Time: {time.time() - start_time:.2f}s")
@@ -267,6 +270,34 @@ class Flake_Identifier():
             plt.show()
 
         return scanned_image, flakes, save
+
+    def identify_flakes_region_model(
+        self,
+        image,
+        profile_path,
+        output=False,
+        color_seed=None,
+        return_segmented_map=False,
+    ):
+        if profile_path is None:
+            raise ValueError("A scan profile is required for region detection.")
+
+        scanned_image, _, details = contour_finder.find_flakes(
+            cv2.cvtColor(image, cv2.COLOR_RGB2BGR),
+            display=output,
+            return_details=True,
+            profile_path=profile_path,
+            color_seed=color_seed,
+        )
+        matched_regions = [
+            region
+            for region in details["region_results"]
+            if region["matched_class"] is not None
+        ]
+        result = (scanned_image, matched_regions, bool(matched_regions))
+        if return_segmented_map:
+            return result + (details["classified_image_without_legend"],)
+        return result
 
     def find_flakes(self, image, output=False):
 

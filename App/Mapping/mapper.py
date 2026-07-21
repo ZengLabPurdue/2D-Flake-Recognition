@@ -181,6 +181,16 @@ class Mapper:
 
         self.app.display_map()
 
+        return {
+            "map_x": x_start,
+            "map_y": y_start,
+            "map_center_x": map_x,
+            "map_center_y": map_y,
+            "map_zoom": step,
+            "map_width": int(true_map.shape[1]),
+            "map_height": int(true_map.shape[0]),
+        }
+
     def orb_ransac_shift_correction(self, existing, incoming, max_features=3000, min_matches=12, good_match_percent=0.35, ransac_reproj_threshold=5.0):
 
         existing_gray = cv2.cvtColor(existing, cv2.COLOR_RGB2GRAY)
@@ -317,6 +327,7 @@ class Mapper:
         zoom=3,
         full_zoom=True,
         save_dir=None,
+        map_save_dir=None,
         full_scan=False,
         full_scan_start_time=None,
         check_cancelled=None,
@@ -329,6 +340,7 @@ class Mapper:
         start_time = time.time()
         center_x = None
         center_y = None
+        captured_tiles = 0
         map_height = 6000
         map_width = 6000
         cropped_width = int(camera_width * CROP_RATIO["2X"]["x"])
@@ -353,7 +365,7 @@ class Mapper:
         try:
             if check_cancelled is not None:
                 check_cancelled()
-            self.app.set_view("Map", True)
+            self.app.set_view("Map", full_scan)
             self.initialize_2x_mapping()
 
             center_x = self.stage_center_x
@@ -413,15 +425,25 @@ class Mapper:
 
                 img = self.frame_processor.apply_vignette_filter(img)
 
+                placement = self.place_frame_on_map(img, zoom=zoom)
+                if placement is None:
+                    continue
+                captured_tiles += 1
+
                 if raw_dir is not None:
                     self.frame_processor.save_image(
                         image=img,
                         save_dir=raw_dir,
                         filename=f"img_2x_{i}.png",
                         vignette_applied=True,
+                        metadata={
+                            **placement,
+                            "map_id": "2x-map-1",
+                            "map_index": 1,
+                            "stage_x_um": float(target_x),
+                            "stage_y_um": float(target_y),
+                        },
                     )
-
-                self.place_frame_on_map(img, zoom=zoom)
 
                 stage_elapsed = time.time() - start_time
                 total_elapsed = (
@@ -447,15 +469,6 @@ class Mapper:
                 if check_cancelled is not None:
                     check_cancelled()
 
-            if save_dir is not None:
-                map_bgr = cv2.cvtColor(self.app.get_true_map(), cv2.COLOR_RGB2BGR)
-                self.frame_processor.save_image(
-                    image=map_bgr,
-                    save_dir=save_dir,
-                    filename="map_2x.png",
-                    vignette_applied=True,
-                )
-
             print("2x scan imaging finished!")
             print(f"Time taken: {time.time() - start_time:.2f}s")
             return center_x, center_y, zoom
@@ -465,6 +478,14 @@ class Mapper:
             raise
 
         finally:
+            if map_save_dir is not None and captured_tiles:
+                map_bgr = cv2.cvtColor(self.app.get_true_map(), cv2.COLOR_RGB2BGR)
+                self.frame_processor.save_image(
+                    image=map_bgr,
+                    save_dir=map_save_dir,
+                    filename="map_2x.png",
+                    vignette_applied=True,
+                )
             if center_x is not None and center_y is not None:
                 self.stage.move_to_xy(center_x, center_y)
             self.scan_running = False
