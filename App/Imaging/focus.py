@@ -23,6 +23,10 @@ class FocusController:
         self.focus_running = False
 
     def _run_on_ui_thread(self, callback, *args):
+        dispatcher = getattr(self.app, "call_on_ui_thread", None)
+        if dispatcher is not None:
+            dispatcher(callback, *args)
+            return
         if threading.current_thread() is threading.main_thread():
             callback(*args)
         else:

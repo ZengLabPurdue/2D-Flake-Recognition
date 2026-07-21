@@ -28,7 +28,7 @@ class SparseTileViewer:
     RENDER_DEBOUNCE_MS = 35
     POLL_INTERVAL_MS = 16
     PLACEHOLDER_ZOOM_RATIO = 1.5
-    PLACEHOLDER_COLOR = "#777777"
+    PLACEHOLDER_COLOR = "#d8d8d8"
     RENDER_BUFFER_RATIO = 2.0
     RENDER_BUFFER_MAX_PIXELS = 12_000_000
     BUFFER_PREFETCH_GUARD_RATIO = 0.12
@@ -876,6 +876,7 @@ class SparseTileViewer:
 
         self._draw_overlay(
             width,
+            height,
             self.title,
             self.scale,
             sample_factors=(
@@ -949,6 +950,7 @@ class SparseTileViewer:
     def _draw_overlay(
         self,
         width,
+        height,
         title,
         scale,
         sample_factors=(),
@@ -962,16 +964,18 @@ class SparseTileViewer:
             levels = ", ".join(f"1/{factor}" for factor in sample_factors)
             source = "Overview" if using_overview else "Tile"
             status = f"{source} sample: {levels}"
-        status_line = f"\n{status}" if status else ""
+        status_line = f"{status}\n" if status else ""
         self.canvas.create_text(
-            width - 14,
-            14,
+            width / 2,
+            height - 14,
             text=(
-                f"{title}  |  {scale:.3g}x{status_line}\n"
+                f"{status_line}{title}  |  Zoom: {scale:.3g}x\n"
                 "Mouse wheel: zoom  |  Drag: pan  |  Double-click: fit"
             ),
             fill="white",
-            anchor="ne",
+            anchor="s",
+            justify="center",
+            width=max(1, width - 40),
             font=("TkDefaultFont", 10),
         )
 

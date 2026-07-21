@@ -26,11 +26,19 @@ class Mapper:
         self.update_scan_status = update_scan_status
         self.scan_running = False
 
-    def initialize_2x_mapping(self):
+    def initialize_2x_mapping(self, check_cancelled=None):
+        if (
+            hasattr(self.app, "hardware_operation_allowed")
+            and not self.app.hardware_operation_allowed()
+        ):
+            return False
 
         self.app.set_live_mapping(False)
 
-        self.turret_controller.change_objective(1)
+        self.turret_controller.change_objective(
+            1,
+            cancel_check=check_cancelled,
+        )
 
         self.app.set_true_map(np.zeros((MAP_SIZE, MAP_SIZE, 3), dtype=np.uint8))
         self.app.set_filter_map(np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.uint8))
@@ -48,16 +56,24 @@ class Mapper:
         self.capture_after_move = False
 
         self.app.display_map()
+        return True
 
     def set_live_map_2x(self):
-
-        self.initialize_2x_mapping()
+        if not self.initialize_2x_mapping():
+            return False
 
         self.app.set_live_mapping(True)
 
         self.app.open_panel("Stage Control Panel")
 
         self.app.set_view("Map", False)
+        return True
+
+    def _move_stage_xy(self, x, y, check_cancelled=None):
+        self.stage.wait_until_not_busy(cancel_check=check_cancelled)
+        if not self.stage.move_to_xy(x, y, wait=False):
+            raise RuntimeError("The stage could not start the requested XY move.")
+        self.stage.wait_until_not_busy(cancel_check=check_cancelled)
 
     def place_frame_on_map(self, img, zoom, filter_img=None):
 
@@ -164,16 +180,13 @@ class Mapper:
         if filter_img is not None:
             filter_crop = filter_img[crop_y0:crop_y1, crop_x0:crop_x1]
 
-        existing = true_map[y0:y1, x0:x1]
+        with self.app.get_map_state_lock():
+            true_map[y0:y1, x0:x1] = crop
+            if filter_img is not None:
+                filter_map[y0:y1, x0:x1] = filter_crop
+                self.app.set_filter_map(filter_map)
 
-        blended = cv2.addWeighted(existing, 0.5, crop, 0.5, 0)
-        
-        true_map[y0:y1, x0:x1] = crop
-        if filter_img is not None:
-            filter_map[y0:y1, x0:x1] = filter_crop
-            self.app.set_filter_map(filter_map)
-
-        self.app.set_true_map(true_map)
+            self.app.set_true_map(true_map)
 
         self.last_live_frame_rgb = img_rgb.copy()
         self.last_live_map_x = map_x
@@ -332,6 +345,11 @@ class Mapper:
         full_scan_start_time=None,
         check_cancelled=None,
     ):
+        if (
+            hasattr(self.app, "hardware_operation_allowed")
+            and not self.app.hardware_operation_allowed()
+        ):
+            return None
         if len(window) != 2 or window[0] < 1 or window[1] < 1:
             raise ValueError("Mapping window dimensions must both be positive.")
 
@@ -366,7 +384,8 @@ class Mapper:
             if check_cancelled is not None:
                 check_cancelled()
             self.app.set_view("Map", full_scan)
-            self.initialize_2x_mapping()
+            if not self.initialize_2x_mapping(check_cancelled=check_cancelled):
+                return None
 
             center_x = self.stage_center_x
             center_y = self.stage_center_y
@@ -415,10 +434,16 @@ class Mapper:
                     / 2
                 )
 
-                self.stage.move_to_xy(target_x, target_y)
-                self.stage.wait_until_not_busy()
+                self._move_stage_xy(
+                    target_x,
+                    target_y,
+                    check_cancelled=check_cancelled,
+                )
 
-                img = self.frame_processor.capture_frame(num_images=2)
+                img = self.frame_processor.capture_frame(
+                    num_images=2,
+                    cancel_check=check_cancelled,
+                )
                 if img is None:
                     print("No image captured, skipping this tile.")
                     continue
@@ -465,7 +490,6 @@ class Mapper:
                     status["scan_type"] = "2x Scan"
                     status["stage"] = "2x Scan"
                 self.update_scan_status(**status)
-                self.root.update()
                 if check_cancelled is not None:
                     check_cancelled()
 
@@ -486,8 +510,14 @@ class Mapper:
                     filename="map_2x.png",
                     vignette_applied=True,
                 )
-            if center_x is not None and center_y is not None:
-                self.stage.move_to_xy(center_x, center_y)
+            restore_center = center_x is not None and center_y is not None
+            if restore_center and check_cancelled is not None:
+                try:
+                    check_cancelled()
+                except Exception:
+                    restore_center = False
+            if restore_center:
+                self._move_stage_xy(center_x, center_y)
             self.scan_running = False
             self.app.set_live_mapping(False)
             self.app.set_view("Map", False)

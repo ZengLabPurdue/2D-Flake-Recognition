@@ -16,6 +16,7 @@ class CameraSettingsPanel:
         vignette_filter_var=None,
         chip_filter_callback=None,
         vignette_filter_callback=None,
+        operation_allowed=None,
     ):
         self.parent = parent
         self.get_camera = get_camera
@@ -33,6 +34,8 @@ class CameraSettingsPanel:
         )
         self.chip_filter_callback = chip_filter_callback
         self.vignette_filter_callback = vignette_filter_callback
+        self.operation_allowed = operation_allowed or (lambda: True)
+        self._hardware_enabled = True
 
         self.resolution_value_to_label = dict(resolution_options)
         self.resolution_label_to_value = {
@@ -187,12 +190,27 @@ class CameraSettingsPanel:
         return frame
 
     def set_slider_enabled(self, enabled: bool):
-        if enabled:
+        if enabled and self._hardware_enabled:
             self.slider.state(["!disabled"])
         else:
             self.slider.state(["disabled"])
 
+    def set_hardware_enabled(self, enabled: bool):
+        """Lock camera settings while the scan worker owns the camera."""
+        self._hardware_enabled = bool(enabled)
+        if self._hardware_enabled:
+            self.auto_exposure_checkbox.state(["!disabled"])
+            self.resolution_dropdown.state(["!disabled", "readonly"])
+        else:
+            self.auto_exposure_checkbox.state(["disabled"])
+            self.resolution_dropdown.state(["disabled"])
+        self.set_slider_enabled(
+            self._hardware_enabled and self.auto_exposure_var.get()
+        )
+
     def toggle_auto_exposure(self):
+        if not self.operation_allowed():
+            return
         camera = self.get_camera()
         active = self.auto_exposure_var.get()
 
@@ -211,7 +229,7 @@ class CameraSettingsPanel:
             camera.put_ExpoAGain(100)
 
     def adjust_exposure(self, exposure):
-        if not self.auto_exposure_var.get():
+        if not self.operation_allowed() or not self.auto_exposure_var.get():
             return
 
         camera = self.get_camera()
@@ -227,6 +245,8 @@ class CameraSettingsPanel:
         self.value_label.config(text=f"Target: {current_exposure}")
 
     def change_resolution(self, event=None):
+        if not self.operation_allowed():
+            return
         print("Resolution changed")
         selected_label = self.resolution_var.get()
 

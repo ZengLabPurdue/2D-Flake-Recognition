@@ -283,14 +283,20 @@ class StageControlPanel:
     # ---------------- Absolute movement ----------------
 
     def set_origin(self):
+        if not self.app.hardware_controls_available():
+            return
         self.stage.set_origin()
         self.update_position_display()
 
     def set_z_zero(self):
+        if not self.app.hardware_controls_available():
+            return
         self.stage.set_z_zero()
         self.update_position_display()
 
     def go_to_position(self, x=None, y=None):
+        if not self.app.hardware_controls_available():
+            return
         self.app.disable_buttons()
 
         try:
@@ -307,6 +313,8 @@ class StageControlPanel:
             self.app.enable_buttons()
 
     def go_to_z_position(self, z=None):
+        if not self.app.hardware_controls_available():
+            return
         self.app.disable_buttons()
 
         try:
@@ -322,10 +330,24 @@ class StageControlPanel:
     # ---------------- Hold movement helpers ----------------
 
     def start_hold_motion(self, start_func):
+        self.hold_job = None
+        if not self.app.hardware_controls_available():
+            self.is_hold = False
+            return
         self.is_hold = True
         start_func()
 
+    def cancel_pending_hold_motion(self):
+        if self.hold_job is not None:
+            self.root.after_cancel(self.hold_job)
+            self.hold_job = None
+        if self.is_hold:
+            self.stage.stop_all()
+        self.is_hold = False
+
     def on_press_motion(self, start_func):
+        if not self.app.hardware_controls_available():
+            return
         self.is_hold = False
         self.hold_job = self.root.after(
             200,
@@ -339,11 +361,12 @@ class StageControlPanel:
 
         if self.is_hold:
             stop_func()
-        else:
+        elif self.app.hardware_controls_available():
             self.update_step_sizes()
             step_func()
 
-        self.update_position_display()
+        if self.app.hardware_controls_available():
+            self.update_position_display()
 
     def update_step_sizes(self):
         try:
@@ -399,12 +422,16 @@ class StageControlPanel:
     # ---------------- Speed callbacks ----------------
 
     def on_speed_change_xy(self, *args):
+        if not self.app.hardware_controls_available():
+            return
         try:
             self.stage.set_velocity(int(self.xy_speed_var.get()))
         except ValueError:
             pass
 
     def on_speed_change_z(self, *args):
+        if not self.app.hardware_controls_available():
+            return
         try:
             self.stage.set_z_velocity(int(self.z_speed_var.get()))
         except ValueError:

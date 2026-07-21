@@ -1,11 +1,20 @@
+import time
+
 from tkinter import Frame, Label, messagebox
 from tkinter import ttk
 
 class ScanStatusPanel:
-    def __init__(self, parent, root=None):
+    def __init__(self, parent, root=None, ui_dispatch=None):
         self.parent = parent
         self.root = root or parent.winfo_toplevel()
+        self.ui_dispatch = ui_dispatch or (
+            lambda callback, *args, **kwargs: callback(*args, **kwargs)
+        )
         self.stop_callback = None
+        self._scan_running = False
+        self._scan_started_at = None
+        self._final_total_elapsed = None
+        self._total_timer_job = None
         self.frame = self._build_panel()
 
     def _build_panel(self):
@@ -13,7 +22,7 @@ class ScanStatusPanel:
             self.parent,
             bg="#f0f0f0",
             width=204,
-            height=188
+            height=222
         )
         panel.place(relx=1.0, rely=0.0, anchor="ne")
 
@@ -21,7 +30,7 @@ class ScanStatusPanel:
             panel,
             bg="white",
             width=200,
-            height=186
+            height=220
         )
         background.place(x=2, y=0)
 
@@ -74,6 +83,16 @@ class ScanStatusPanel:
         )
         self.total_time_label.place(relx=0.5, y=115, anchor="n")
 
+        self.processing_label = Label(
+            panel,
+            text="Processing: Not Started",
+            bg="white",
+            fg="black",
+            justify="center",
+            wraplength=188,
+        )
+        self.processing_label.place(relx=0.5, y=135, anchor="n")
+
         style = ttk.Style()
         style.configure(
             "Normal.TButton",
@@ -88,7 +107,7 @@ class ScanStatusPanel:
             command=self._request_stop,
             style="Normal.TButton",
         )
-        self.stop_button.place(relx=0.5, y=145, anchor="n")
+        self.stop_button.place(relx=0.5, y=182, anchor="n")
         self.stop_button.state(["disabled"])
 
         return panel
@@ -97,19 +116,64 @@ class ScanStatusPanel:
         self.stop_callback = callback
 
     def set_scan_running(self, running):
+        self.ui_dispatch(self._set_scan_running_ui, bool(running))
+
+    def _set_scan_running_ui(self, running):
         if running:
+            if not self._scan_running:
+                self._scan_started_at = time.monotonic()
+                self._final_total_elapsed = None
+            self._scan_running = True
             self.stop_button.configure(text="Stop Scan")
             self.stop_button.state(["!disabled"])
+            self._schedule_total_timer()
         else:
+            if self._final_total_elapsed is not None:
+                self.total_time_label.config(
+                    text=(
+                        "Total Time Elapsed: "
+                        f"{self._final_total_elapsed}"
+                    )
+                )
+            elif self._scan_started_at is not None:
+                self.total_time_label.config(
+                    text=f"Total Time Elapsed: {self._elapsed_string()}"
+                )
+            self._scan_running = False
+            if self._total_timer_job is not None:
+                self.root.after_cancel(self._total_timer_job)
+                self._total_timer_job = None
             self.stop_button.configure(text="Stop Scan")
             self.stop_button.state(["disabled"])
+
+    def _schedule_total_timer(self):
+        if self._total_timer_job is None and self._scan_running:
+            self._total_timer_job = self.root.after(250, self._tick_total_time)
+
+    def _tick_total_time(self):
+        self._total_timer_job = None
+        if not self._scan_running:
+            return
+        self.total_time_label.config(
+            text=f"Total Time Elapsed: {self._elapsed_string()}"
+        )
+        self._schedule_total_timer()
+
+    def _elapsed_string(self):
+        elapsed = (
+            time.monotonic() - self._scan_started_at
+            if self._scan_started_at is not None
+            else 0.0
+        )
+        return time.strftime("%H:%M:%S", time.gmtime(max(0.0, elapsed)))
 
     def _request_stop(self):
         if self.stop_callback is None:
             return
         if not messagebox.askyesno(
             "Stop Scan",
-            "Stop the scan after the current stage movement or image capture finishes?",
+            "Stop the scan after the current stage movement, image capture, "
+            "or processing step finishes?",
             parent=self.root,
         ):
             return
@@ -124,7 +188,28 @@ class ScanStatusPanel:
         progress=None,
         stage_elapsed_time=None,
         total_elapsed_time=None,
+        processing_state=None,
     ):
+        self.ui_dispatch(
+            self._apply_status,
+            {
+                "scan_type": scan_type,
+                "stage": stage,
+                "progress": progress,
+                "stage_elapsed_time": stage_elapsed_time,
+                "total_elapsed_time": total_elapsed_time,
+                "processing_state": processing_state,
+            },
+        )
+
+    def _apply_status(self, status):
+        scan_type = status["scan_type"]
+        stage = status["stage"]
+        progress = status["progress"]
+        stage_elapsed_time = status["stage_elapsed_time"]
+        total_elapsed_time = status["total_elapsed_time"]
+        processing_state = status["processing_state"]
+
         if scan_type is not None:
             self.scan_type_label.config(text=f"Scan: {scan_type}")
 
@@ -138,6 +223,17 @@ class ScanStatusPanel:
             self.stage_time_label.config(text=f"Stage Time Elapsed: {stage_elapsed_time}")
 
         if total_elapsed_time is not None:
-            self.total_time_label.config(text=f"Total Time Elapsed: {total_elapsed_time}")
+            if stage in {"Complete", "Stopped", "Error"}:
+                self._final_total_elapsed = total_elapsed_time
+                self.total_time_label.config(
+                    text=f"Total Time Elapsed: {total_elapsed_time}"
+                )
+            elif not self._scan_running:
+                self.total_time_label.config(
+                    text=f"Total Time Elapsed: {total_elapsed_time}"
+                )
+
+        if processing_state is not None:
+            self.processing_label.config(text=f"Processing: {processing_state}")
 
         self.frame.update_idletasks()

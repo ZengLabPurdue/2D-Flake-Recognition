@@ -18,10 +18,14 @@ class TurretController:
     def get_position(self):
         return self.turret.check_position()
     
-    def turn_to_position(self, position):
-        self.turret.turn_to_position(position)
+    def turn_to_position(self, position, cancel_check=None, timeout=30):
+        self.turret.turn_to_position(
+            position,
+            cancel_check=cancel_check,
+            timeout=timeout,
+        )
 
-    def change_objective(self, position):
+    def change_objective(self, position, cancel_check=None):
         objective_map = {
             1: ("2X", RELATIVE_XY["2X"]["X"], RELATIVE_XY["2X"]["Y"], RELATIVE_Z["2X"]),
             2: ("10X", RELATIVE_XY["10X"]["X"], RELATIVE_XY["10X"]["Y"], RELATIVE_Z["10X"]),
@@ -47,9 +51,27 @@ class TurretController:
             change_y = target_rel_y - current_rel_y
             change_z = target_rel_z - current_rel_z
 
-            self.stage.move_to_xy(current_x + change_x, current_y + change_y)
-            self.stage.move_to_z(current_z + change_z)
-            self.turn_to_position(position)
+            moved_xy = self.stage.move_to_xy(
+                current_x + change_x,
+                current_y + change_y,
+                cancel_check=cancel_check,
+            )
+            if not moved_xy:
+                raise RuntimeError(
+                    "The stage was busy before the objective XY offset move."
+                )
+            moved_z = self.stage.move_to_z(
+                current_z + change_z,
+                cancel_check=cancel_check,
+            )
+            if not moved_z:
+                raise RuntimeError(
+                    "The stage was busy before the objective Z offset move."
+                )
+            self.turn_to_position(
+                position,
+                cancel_check=cancel_check,
+            )
 
             self.app.frame_processor.set_default_exposure()
 

@@ -1,6 +1,8 @@
 import os
 import sys
 import threading
+import time
+from queue import Empty, Queue
 
 import cv2
 import numpy as np
@@ -37,6 +39,20 @@ TURRET_COM_PORT = sys.argv[2]
 class App:
     def __init__(self, root):
         self.root = root
+        self._ui_thread_id = threading.get_ident()
+        self._ui_queue = Queue()
+        self._ui_poll_job = None
+        self._closing = False
+        self._shutdown_requested = False
+        self._focus_shutdown_started_at = None
+        self._map_render_job = None
+        self._last_map_render = 0.0
+        self._map_render_interval_ms = 125
+        self._map_state_lock = threading.RLock()
+        self._live_mapping_status = False
+        self._scan_controls_locked = False
+        self._schedule_ui_queue_poll()
+
         self.root.title("Scanning App")
         self.main_frame = Frame(root, bg="#f0f0f0")
         self.main_frame.pack(fill=BOTH, expand=True)
@@ -46,10 +62,6 @@ class App:
 
         self.true_map = np.zeros((MAP_SIZE, MAP_SIZE, 3), dtype=np.uint8)
         self.filter_map = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.uint8)
-        # Allocated lazily only for region scans; a 10k RGB layer is about 300 MB.
-        self.region_map = None
-        self.region_map_id = None
-        self._region_map_lock = threading.Lock()
 
         self.img_label = Label(self.main_frame, bg="#f0f0f0")
         self.img_label.pack(fill=BOTH, expand=True)
@@ -62,23 +74,8 @@ class App:
 
         self.live_mapping_var = tk.BooleanVar(value=False)
         self.map_chip_filter_var = tk.BooleanVar(value=False)
-        self.region_map_view_var = tk.BooleanVar(value=False)
-        self.region_map_available = False
         self.camera_chip_filter_var = tk.BooleanVar(value=False)
         self.camera_vignette_filter_var = tk.BooleanVar(value=False)
-        self.region_map_toggle = tk.Checkbutton(
-            self.main_frame,
-            text="Segmented Map",
-            variable=self.region_map_view_var,
-            command=self.toggle_region_map_view,
-            bg="white",
-            activebackground="white",
-            selectcolor="white",
-            relief="solid",
-            borderwidth=1,
-            padx=8,
-            pady=4,
-        )
         self.view_mode = None
         self.set_view("Camera View")
 
@@ -122,6 +119,7 @@ class App:
         self.scan_status_panel = ScanStatusPanel(
             parent=self.main_frame,
             root=self.root,
+            ui_dispatch=self.call_on_ui_thread,
         )
 
         self.mapper = Mapper(
@@ -145,7 +143,8 @@ class App:
             frame_processor=self.frame_processor,
             mapper=self.mapper,
             update_scan_status=self.scan_status_panel.update_status,
-            set_scan_running=self.scan_status_panel.set_scan_running,
+            set_scan_running=self.set_scan_running,
+            ui_dispatch=self.call_on_ui_thread,
         )
         self.scan_status_panel.set_stop_callback(self.scan_manager.stop_scan)
 
@@ -179,6 +178,7 @@ class App:
             vignette_filter_var=self.camera_vignette_filter_var,
             chip_filter_callback=lambda: self.set_view("Camera View"),
             vignette_filter_callback=self.toggle_camera_vignette_filter,
+            operation_allowed=self.hardware_controls_available,
         )
 
         self.focus_panel = FocusPanel(
@@ -205,6 +205,7 @@ class App:
             root=self.root,
             app=self,
             scan_manager=self.scan_manager,
+            ui_dispatch=self.call_on_ui_thread,
         )
 
         self.focus_controller.sharpness_callback = self.focus_panel.update_sharpness
@@ -267,6 +268,35 @@ class App:
 
     # ------------- Initialization -------------
 
+    def call_on_ui_thread(self, callback, *args, **kwargs):
+        """Run Tk work on the main thread without blocking scan hardware."""
+        if self._closing:
+            return None
+        if threading.get_ident() == self._ui_thread_id:
+            return callback(*args, **kwargs)
+        self._ui_queue.put((callback, args, kwargs))
+        return None
+
+    def _schedule_ui_queue_poll(self):
+        if self._closing or self._ui_poll_job is not None:
+            return
+        self._ui_poll_job = self.root.after(15, self._drain_ui_queue)
+
+    def _drain_ui_queue(self):
+        self._ui_poll_job = None
+        if self._closing:
+            return
+        for _ in range(100):
+            try:
+                callback, args, kwargs = self._ui_queue.get_nowait()
+            except Empty:
+                break
+            try:
+                callback(*args, **kwargs)
+            except Exception:
+                self.root.report_callback_exception(*sys.exc_info())
+        self._schedule_ui_queue_poll()
+
     def init_menu_bar(self):
         menu_bar = Menu(self.root)
         file_menu = Menu(menu_bar, tearoff=0)
@@ -326,13 +356,50 @@ class App:
         menu_bar.add_cascade(label="Panels", menu=panel_menu)
 
         map_menu = Menu(menu_bar, tearoff=0)
-        map_menu.add_radiobutton(label="Live Map 2x", variable=self.live_mapping_var, value=True, command=lambda: self.mapper.set_live_map_2x())
-        map_menu.add_command(label="Auto Map 2x", command=self.mapper.auto_map_2x)
+        map_menu.add_radiobutton(
+            label="Live Map 2x",
+            variable=self.live_mapping_var,
+            value=True,
+            command=self._start_live_map_2x,
+        )
+        self._live_map_menu_index = map_menu.index("end")
+        map_menu.add_command(
+            label="Auto Map 2x",
+            command=self._start_auto_map_2x,
+        )
+        self._auto_map_menu_index = map_menu.index("end")
+        self.map_menu = map_menu
         menu_bar.add_cascade(label="Map", menu=map_menu)
 
         menu_bar.add_command(label="Scan", command=self.scan_setup_panel.show)
 
         self.root.config(menu=menu_bar)
+
+    def _start_live_map_2x(self):
+        if not self.hardware_controls_available():
+            self.live_mapping_var.set(False)
+            return
+        self.mapper.set_live_map_2x()
+
+    def _start_auto_map_2x(self):
+        """Run the legacy Auto Map command through the scan worker."""
+        if not self.hardware_controls_available():
+            return
+        try:
+            self.scan_manager.start_scan(
+                scan_type="2x Scan",
+                on_error=lambda error: messagebox.showerror(
+                    "Auto Map Error",
+                    str(error),
+                    parent=self.root,
+                ),
+            )
+        except RuntimeError as error:
+            messagebox.showerror(
+                "Auto Map Error",
+                str(error),
+                parent=self.root,
+            )
 
     def display_chip_dropdown(self, display=True):
 
@@ -355,6 +422,25 @@ class App:
     # ------------- Display Functions -------------
 
     def display_map(self):
+        """Request a coalesced map redraw on the Tk thread."""
+        if threading.get_ident() != self._ui_thread_id:
+            self.call_on_ui_thread(self.display_map)
+            return
+        if self._map_render_job is not None:
+            return
+        elapsed_ms = (time.monotonic() - self._last_map_render) * 1000
+        delay_ms = max(0, int(self._map_render_interval_ms - elapsed_ms))
+        if delay_ms:
+            self._map_render_job = self.root.after(
+                delay_ms,
+                self._render_scheduled_map,
+            )
+        else:
+            self._render_scheduled_map()
+
+    def _render_scheduled_map(self):
+        self._map_render_job = None
+        self._last_map_render = time.monotonic()
         canvas_width = self.map_canvas.winfo_width()
         canvas_height = self.map_canvas.winfo_height()
 
@@ -362,41 +448,23 @@ class App:
             self.map_canvas.bind("<Configure>", lambda e: self.display_map())
             return
 
-        if (
-            self.region_map_available
-            and self.region_map_view_var.get()
-            and self.region_map is not None
-        ):
-            map_data = self.region_map
-            map_lock = self._region_map_lock
-        else:
-            map_data = self.true_map
-            map_lock = None
+        with self._map_state_lock:
+            map_height, map_width = self.true_map.shape[:2]
+            img_ratio = map_width / map_height
+            canvas_ratio = canvas_width / canvas_height
 
-        map_height, map_width = map_data.shape[:2]
-        img_ratio = map_width / map_height
-        canvas_ratio = canvas_width / canvas_height
+            if img_ratio > canvas_ratio:
+                new_width = canvas_width
+                new_height = int(canvas_width / img_ratio)
+            else:
+                new_height = canvas_height
+                new_width = int(canvas_height * img_ratio)
 
-        if img_ratio > canvas_ratio:
-            new_width = canvas_width
-            new_height = int(canvas_width / img_ratio)
-        else:
-            new_height = canvas_height
-            new_width = int(canvas_height * img_ratio)
-
-        if map_lock is None:
             map_resized = cv2.resize(
-                map_data,
+                self.true_map,
                 (new_width, new_height),
                 interpolation=cv2.INTER_NEAREST,
             )
-        else:
-            with map_lock:
-                map_resized = cv2.resize(
-                    map_data,
-                    (new_width, new_height),
-                    interpolation=cv2.INTER_NEAREST,
-                )
         self.map_image = Image.fromarray(map_resized.astype(np.uint8, copy=False))
         self.tk_map_image = ImageTk.PhotoImage(self.map_image)
 
@@ -483,6 +551,9 @@ class App:
     # ------------- Util Functions -------------
 
     def update_panels(self):
+        if threading.get_ident() != self._ui_thread_id:
+            self.call_on_ui_thread(self.update_panels)
+            return
         y_position = -2
 
         for panel in self.panels:
@@ -502,6 +573,9 @@ class App:
                 y_position += frame.winfo_height()
 
     def close_all_panels(self):
+        if threading.get_ident() != self._ui_thread_id:
+            self.call_on_ui_thread(self.close_all_panels)
+            return
         for panel in self.panels:
             panel["var"].set(False)
         self.update_panels()
@@ -509,6 +583,9 @@ class App:
         self.scan_profile_panel.hide()
 
     def open_panel(self, name):
+        if threading.get_ident() != self._ui_thread_id:
+            self.call_on_ui_thread(self.open_panel, name)
+            return
         for panel in self.panels:
             if panel["name"] == name:
                 panel["var"].set(True)
@@ -516,17 +593,37 @@ class App:
                 return
 
     def enable_buttons(self):
+        if self._scan_controls_locked:
+            return
+        if threading.get_ident() != self._ui_thread_id:
+            self.call_on_ui_thread(self.enable_buttons)
+            return
         for btn in self.buttons:
             btn.state(["!disabled"])
         self.root.update_idletasks()
 
     def disable_buttons(self):
+        if threading.get_ident() != self._ui_thread_id:
+            self.call_on_ui_thread(self.disable_buttons)
+            return
         for btn in self.buttons:
             btn.state(["disabled"])
         self.root.update_idletasks()
 
     def register_button(self, button):
         self.buttons.append(button)
+
+    def hardware_controls_available(self):
+        """Manual hardware controls are unavailable while a scan owns them."""
+        return not self._scan_controls_locked
+
+    def hardware_operation_allowed(self):
+        if not self._scan_controls_locked:
+            return True
+        return (
+            hasattr(self, "scan_manager")
+            and self.scan_manager.is_scan_worker_thread()
+        )
 
     def clear_focus(self, event):
         widget = event.widget
@@ -541,11 +638,49 @@ class App:
         self.root.focus_set()
 
     def on_close(self):
-        if hasattr(self, "view_scans_panel"):
-            self.view_scans_panel.shutdown()
-        self.frame_processor.close()
-        self.stage.disconnect()
-        self.root.destroy()
+        if (
+            hasattr(self, "scan_manager")
+            and self.scan_manager.is_scan_running()
+        ):
+            if not self._shutdown_requested:
+                self._shutdown_requested = True
+                self.scan_manager.stop_scan()
+            self.root.after(50, self.on_close)
+            return
+
+        focus_controller = getattr(self, "focus_controller", None)
+        focus_thread = (
+            getattr(focus_controller, "focus_thread", None)
+            if focus_controller is not None
+            else None
+        )
+        if focus_thread is not None and focus_thread.is_alive():
+            focus_controller.stop_auto_focus()
+            focus_thread.join(timeout=0.05)
+        if focus_thread is not None and focus_thread.is_alive():
+            if self._focus_shutdown_started_at is None:
+                self._focus_shutdown_started_at = time.monotonic()
+            if time.monotonic() - self._focus_shutdown_started_at < 5.0:
+                self.root.after(50, self.on_close)
+                return
+            print("Shutdown warning: autofocus did not stop within 5 seconds.")
+
+        self._closing = True
+        if self._ui_poll_job is not None:
+            self.root.after_cancel(self._ui_poll_job)
+            self._ui_poll_job = None
+        if self._map_render_job is not None:
+            self.root.after_cancel(self._map_render_job)
+            self._map_render_job = None
+        try:
+            if hasattr(self, "view_scans_panel"):
+                self.view_scans_panel.shutdown()
+            self.frame_processor.close()
+            self.stage.disconnect()
+        except Exception as error:
+            print(f"Shutdown warning: {error}")
+        finally:
+            self.root.destroy()
 
     def get_view(self):
         return self.view_mode
@@ -568,6 +703,12 @@ class App:
         return image_x, image_y
 
     def set_view(self, mode, filter_status=None):
+        if threading.get_ident() != self._ui_thread_id:
+            # Keep the inexpensive state visible to the scan worker while the
+            # actual Tk layout change waits in the UI queue.
+            self.view_mode = mode
+            self.call_on_ui_thread(self.set_view, mode, filter_status)
+            return
         self.view_mode = mode
 
         if hasattr(self, "scan_profile_panel") and mode not in (
@@ -584,7 +725,6 @@ class App:
                 # The live 2x map always uses the normal image now.  Mapper
                 # callers still pass the legacy flag, so explicitly discard it.
                 self.map_chip_filter_var.set(False)
-                self.region_map_view_var.set(False)
             elif mode == "Camera View":
                 self.camera_chip_filter_var.set(filter_status)
 
@@ -607,19 +747,24 @@ class App:
             self.img_label.pack_forget()
             self.scan_results_canvas.pack(fill=BOTH, expand=True)
 
-        self._update_region_map_toggle_visibility()
         self.root.update_idletasks()
 
     def get_live_mapping(self):
-        return self.live_mapping_var.get()
+        return self._live_mapping_status
 
     def show_normal_map_view(self):
         self.map_chip_filter_var.set(False)
-        self.region_map_view_var.set(False)
         self.set_view("Map")
     
     def set_live_mapping(self, live_mapping_status):
-        self.live_mapping_var.set(live_mapping_status)
+        self._live_mapping_status = bool(live_mapping_status)
+        if threading.get_ident() != self._ui_thread_id:
+            self.call_on_ui_thread(
+                self.live_mapping_var.set,
+                self._live_mapping_status,
+            )
+            return
+        self.live_mapping_var.set(self._live_mapping_status)
 
     def get_filter(self):
         if self.view_mode == "Map":
@@ -629,6 +774,9 @@ class App:
         return False
     
     def set_filter(self, status : bool):
+        if threading.get_ident() != self._ui_thread_id:
+            self.call_on_ui_thread(self.set_filter, status)
+            return
         if self.view_mode == "Map":
             self.map_chip_filter_var.set(False)
         elif self.view_mode == "Camera View":
@@ -641,72 +789,23 @@ class App:
         self.map_chip_filter_var.set(False)
         self.set_view("Map")
 
-    def toggle_region_map_view(self):
-        self.set_view("Map")
+    def set_scan_running(self, running):
+        self._scan_controls_locked = bool(running)
+        self.call_on_ui_thread(self._apply_scan_running, bool(running))
 
-    def _update_region_map_toggle_visibility(self):
-        if self.region_map_available and self.view_mode == "Map":
-            self.region_map_toggle.place(
-                x=12,
-                y=12,
-                anchor="nw",
-            )
-            self.region_map_toggle.lift()
+    def _apply_scan_running(self, running):
+        self.scan_status_panel.set_scan_running(running)
+        self.camera_settings_panel.set_hardware_enabled(not running)
+        if running:
+            self.stage_control_panel.cancel_pending_hold_motion()
+        if hasattr(self, "map_menu"):
+            state = "disabled" if running else "normal"
+            self.map_menu.entryconfig(self._live_map_menu_index, state=state)
+            self.map_menu.entryconfig(self._auto_map_menu_index, state=state)
+        if running:
+            self.disable_buttons()
         else:
-            self.region_map_toggle.place_forget()
-
-    def set_region_map_available(self, available):
-        self.region_map_available = bool(available)
-        if not self.region_map_available:
-            self.region_map_view_var.set(False)
-        self._update_region_map_toggle_visibility()
-        if self.view_mode == "Map":
-            self.display_map()
-
-    def get_region_map_view(self):
-        return self.region_map_available and self.region_map_view_var.get()
-
-    def reset_region_map(self, map_id, shape):
-        with self._region_map_lock:
-            self.region_map = np.zeros(shape, dtype=np.uint8)
-            self.region_map_id = map_id
-        if self.get_region_map_view() and self.view_mode == "Map":
-            self.display_map()
-
-    def place_region_map_frame(self, map_id, image_rgb, map_x, map_y, zoom):
-        if (
-            map_id is None
-            or image_rgb is None
-            or map_x is None
-            or map_y is None
-            or zoom is None
-        ):
-            return
-
-        step = max(1, int(round(float(zoom))))
-        image_small = image_rgb[::step, ::step]
-        map_x = int(map_x)
-        map_y = int(map_y)
-
-        with self._region_map_lock:
-            if map_id != self.region_map_id:
-                return
-            map_height, map_width = self.region_map.shape[:2]
-            x_start = max(0, map_x)
-            y_start = max(0, map_y)
-            source_x = max(0, -map_x)
-            source_y = max(0, -map_y)
-            width = min(image_small.shape[1] - source_x, map_width - x_start)
-            height = min(image_small.shape[0] - source_y, map_height - y_start)
-            if width <= 0 or height <= 0:
-                return
-            self.region_map[
-                y_start:y_start + height,
-                x_start:x_start + width,
-            ] = image_small[
-                source_y:source_y + height,
-                source_x:source_x + width,
-            ]
+            self.enable_buttons()
 
     def get_camera_chip_filter(self):
         return self.camera_chip_filter_var.get()
@@ -748,13 +847,18 @@ class App:
         return self.true_map
     
     def set_true_map(self, map):
-        self.true_map = map
+        with self._map_state_lock:
+            self.true_map = map
 
     def get_filter_map(self):
         return self.filter_map
     
     def set_filter_map(self, filter_map):
-        self.filter_map = filter_map
+        with self._map_state_lock:
+            self.filter_map = filter_map
+
+    def get_map_state_lock(self):
+        return self._map_state_lock
 
     def set_active_scan_profile(self, profile):
         self.active_scan_profile = profile

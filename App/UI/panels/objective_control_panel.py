@@ -116,6 +116,8 @@ class ObjectiveControlPanel:
         return panel
     
     def change_objective(self, position):
+        if not self.app.hardware_controls_available():
+            return
         self.turret_controller.change_objective(position)
         self.objective_var.set(f"Objective: {position}")
         #self.app.clear_focus()

@@ -27,11 +27,21 @@ class ScanSetupPanel:
     DEFAULT_MATERIAL = "Gr"
     DEFAULT_SUBSTRATE = "285nm"
 
-    def __init__(self, parent, root, app, scan_manager):
+    def __init__(
+        self,
+        parent,
+        root,
+        app,
+        scan_manager,
+        ui_dispatch=None,
+    ):
         self.parent = parent
         self.root = root
         self.app = app
         self.scan_manager = scan_manager
+        self.ui_dispatch = ui_dispatch or (
+            lambda callback, *args, **kwargs: callback(*args, **kwargs)
+        )
         self._default_profile_checked = False
 
         self.scan_type_var = tk.StringVar(value=self.SCAN_TYPES[0])
@@ -357,13 +367,20 @@ class ScanSetupPanel:
 
     def _execute_scan(self, options):
         try:
-            self.scan_manager.run_scan(**options)
-        except Exception as exc:
-            messagebox.showerror(
-                "Scan Error",
-                str(exc),
-                parent=self.root,
+            self.scan_manager.start_scan(
+                on_error=self._show_scan_error,
+                **options,
             )
+        except Exception as exc:
+            self._show_scan_error(exc)
+
+    def _show_scan_error(self, error):
+        self.ui_dispatch(
+            messagebox.showerror,
+            "Scan Error",
+            str(error),
+            parent=self.root,
+        )
 
     def _get_window(self):
         try:

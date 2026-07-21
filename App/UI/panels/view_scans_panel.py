@@ -49,16 +49,11 @@ class ViewScansPanel:
         self.frame.place_forget()
 
     def _build_panel(self):
-        self.pos_scan_name = 50
-        self.pos_chip = 85
-        self.pos_image = 125
-        self.pos_buttons = 160
-
         self.frame = Frame(
             self.parent,
             bg="#f0f0f0",
             width=204,
-            height=225
+            height=225,
         )
         self.frame.place(relx=0.0, rely=0.0, anchor="nw")
 
@@ -66,62 +61,85 @@ class ViewScansPanel:
             self.frame,
             bg="white",
             width=200,
-            height=223
+            height=223,
         )
         self.background.place(x=2, y=0)
 
+        self.content = Frame(self.background, bg="white", width=184)
+        self.content.place(x=8, y=8, width=184)
+        self.content.columnconfigure(0, weight=1)
+
         title = Label(
-            self.frame,
+            self.content,
             text="Scan Results",
             bg="white",
             fg="black",
-            font=("TkDefaultFont", 13)
+            font=("TkDefaultFont", 13),
         )
-        title.place(relx=0.5, y=10, anchor="n")
+        title.grid(row=0, column=0, sticky="ew", pady=(0, 8))
 
         self.scan_name_var = tk.StringVar(value="Scan: Not Selected")
 
         self.scan_name_label = Label(
-            self.frame,
+            self.content,
             textvariable=self.scan_name_var,
             bg="white",
             fg="black",
-            font="TkDefaultFont"
+            font="TkDefaultFont",
+            justify="center",
+            wraplength=176,
         )
-        self.scan_name_label.place(relx=0.5, y=self.pos_scan_name, anchor="n")
+        self.scan_name_label.grid(
+            row=1,
+            column=0,
+            sticky="ew",
+            pady=(0, 8),
+        )
 
         self.chip_var = tk.StringVar()
 
         self.chip_dropdown = ttk.Combobox(
-            self.frame,
+            self.content,
             textvariable=self.chip_var,
-            state="readonly"
+            state="readonly",
+            width=1,
         )
-        self.chip_dropdown.place(relx=0.5, y=self.pos_chip, anchor="n", width=184)
+        self.chip_dropdown.grid(
+            row=2,
+            column=0,
+            sticky="ew",
+            pady=(0, 8),
+        )
         self.chip_dropdown.bind("<<ComboboxSelected>>", self._on_chip_selected)
 
         self.image_var = tk.StringVar(value="Image: None")
 
         self.image_label = Label(
-            self.frame,
+            self.content,
             textvariable=self.image_var,
             bg="white",
             fg="black",
-            font="TkDefaultFont"
+            font="TkDefaultFont",
+            justify="center",
+            wraplength=176,
         )
-        self.image_label.place(relx=0.5, y=self.pos_image, anchor="n")
+        self.image_label.grid(
+            row=3,
+            column=0,
+            sticky="ew",
+            pady=(0, 8),
+        )
 
         self.button_panel = Frame(
-            self.frame,
+            self.content,
             bg="white",
             width=80,
-            height=45
+            height=32,
         )
-        self.button_panel.place(relx=0.5, x=0, y=self.pos_buttons, anchor="n")
-        self.button_panel.pack_propagate(False)
+        self.button_panel.grid_propagate(False)
 
         self.fit_map_button = ttk.Button(
-            self.background,
+            self.content,
             text="Fit Map",
             command=self.tile_viewer.fit_to_view,
         )
@@ -144,6 +162,63 @@ class ViewScansPanel:
 
         self.btn_previous.grid(row=0, column=0, sticky="nsew")
         self.btn_next.grid(row=0, column=1, sticky="nsew")
+
+        self._show_chip = True
+        self._show_navigation = True
+        self._show_fit = False
+        self._resize_job = None
+        self.scan_name_var.trace_add("write", self._queue_panel_resize)
+        self.image_var.trace_add("write", self._queue_panel_resize)
+        self._layout_controls(
+            show_chip=True,
+            show_navigation=True,
+            show_fit=False,
+        )
+
+    def _queue_panel_resize(self, *_args):
+        if self._resize_job is None:
+            self._resize_job = self.frame.after_idle(self._refresh_panel_height)
+
+    def _refresh_panel_height(self):
+        self._resize_job = None
+        self.content.update_idletasks()
+        height = max(96, self.content.winfo_reqheight() + 16)
+        self.frame.configure(height=height)
+        self.background.configure(height=max(1, height - 2))
+
+    def _layout_controls(
+        self,
+        show_chip=None,
+        show_navigation=None,
+        show_fit=None,
+    ):
+        if show_chip is not None:
+            self._show_chip = bool(show_chip)
+        if show_navigation is not None:
+            self._show_navigation = bool(show_navigation)
+        if show_fit is not None:
+            self._show_fit = bool(show_fit)
+
+        if self._show_chip:
+            self.chip_dropdown.grid()
+        else:
+            self.chip_dropdown.grid_remove()
+
+        self.button_panel.grid_remove()
+        self.fit_map_button.grid_remove()
+        if self._show_navigation:
+            self.button_panel.grid(
+                row=4,
+                column=0,
+                pady=(0, 2),
+            )
+        elif self._show_fit:
+            self.fit_map_button.grid(
+                row=4,
+                column=0,
+                pady=(0, 2),
+            )
+        self._queue_panel_resize()
 
     def add_to_menu(self, parent_menu):
         self.results_menu = tk.Menu(parent_menu, tearoff=0)
@@ -338,21 +413,7 @@ class ViewScansPanel:
         self.tile_viewer.shutdown()
 
     def display_chip_dropdown(self, display=True):
-        shift = 0 if display else -40
-
-        if display:
-            self.chip_dropdown.place(relx=0.5, y=self.pos_chip, anchor="n", width=184)
-        else:
-            self.chip_dropdown.place_forget()
-
-        self.image_label.place(relx=0.5, y=self.pos_image + shift, anchor="n")
-        self.button_panel.place(relx=0.5, y=self.pos_buttons + shift, anchor="n")
-
-        base_height = 225
-        new_height = base_height + shift
-
-        self.frame.config(height=new_height)
-        self.background.config(height=new_height - 2)
+        self._layout_controls(show_chip=display)
 
     def open_scan(self):
         folder = filedialog.askdirectory(title="Select Scan Folder")
@@ -405,7 +466,11 @@ class ViewScansPanel:
         self.sparse_map_mode = selected_view != "Flakes Found"
         self.chip_root = None
         self.chip_source_folder = None
-        self.fit_map_button.place_forget()
+        self._layout_controls(
+            show_chip=False,
+            show_navigation=False,
+            show_fit=False,
+        )
 
         base_path = self.view_scan_path / "All Images"
 
@@ -415,11 +480,10 @@ class ViewScansPanel:
             self.view_folder = self._named_child(magnification_root, "Raw")
             self.display_chip_dropdown(False)
             if self.view_folder is None:
-                self.button_panel.place_forget()
-                self.fit_map_button.place(
-                    relx=0.5,
-                    y=self.pos_buttons - 40,
-                    anchor="n",
+                self._layout_controls(
+                    show_chip=False,
+                    show_navigation=False,
+                    show_fit=True,
                 )
                 self._load_flattened_map("map_2x.png", "Raw 2x", False)
                 return
@@ -429,8 +493,11 @@ class ViewScansPanel:
             self.chip_var.set("")
             self.view_folder = self._named_child(magnification_root, "Filtered")
             self.display_chip_dropdown(False)
-            self.button_panel.place_forget()
-            self.fit_map_button.place(relx=0.5, y=self.pos_buttons - 40, anchor="n")
+            self._layout_controls(
+                show_chip=False,
+                show_navigation=False,
+                show_fit=True,
+            )
             if self.view_folder is not None:
                 self.load_current_folder()
             else:
@@ -441,8 +508,11 @@ class ViewScansPanel:
             self.chip_var.set("")
             self.view_folder = self.view_scan_path / "Maps"
             self.display_chip_dropdown(False)
-            self.button_panel.place_forget()
-            self.fit_map_button.place(relx=0.5, y=self.pos_buttons - 40, anchor="n")
+            self._layout_controls(
+                show_chip=False,
+                show_navigation=False,
+                show_fit=True,
+            )
             self._load_flattened_map(
                 "map_2x_scan_windows.png",
                 "2x Scan Windows",
@@ -535,8 +605,11 @@ class ViewScansPanel:
                 self.view_folder = flakes_root
                 self.image_files = []
                 self.chip_var.set("")
-                self.display_chip_dropdown(False)
-                self.button_panel.place_forget()
+                self._layout_controls(
+                    show_chip=False,
+                    show_navigation=False,
+                    show_fit=False,
+                )
                 self.image_var.set("Image: No flakes found")
                 self.tile_viewer.clear("No flakes found in this scan")
                 return
@@ -546,12 +619,11 @@ class ViewScansPanel:
             self.display_chip_dropdown(True)
             self.populate_chips_dropdown(flakes_root, require_images=True)
 
-        if self.sparse_map_mode:
-            self.button_panel.place_forget()
-            button_y = self.pos_buttons if self.chip_root is not None else self.pos_buttons - 40
-            self.fit_map_button.place(relx=0.5, y=button_y, anchor="n")
-        else:
-            self.fit_map_button.place_forget()
+        self._layout_controls(
+            show_chip=self.chip_root is not None,
+            show_navigation=not self.sparse_map_mode,
+            show_fit=self.sparse_map_mode,
+        )
         self.load_current_folder()
 
     def load_current_folder(self):

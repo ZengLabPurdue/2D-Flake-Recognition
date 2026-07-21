@@ -222,7 +222,14 @@ class FrameProcessor:
         max_speed = self.hcam.MaxSpeed()
         self.hcam.put_Speed(max_speed)
 
-    def capture_frame(self, num_images=1): #TODO: Figure out last position mixing bug
+    def capture_frame(
+        self,
+        num_images=1,
+        cancel_check=None,
+        timeout_seconds=None,
+    ): #TODO: Figure out last position mixing bug
+        if cancel_check is not None:
+            cancel_check()
         if len(self.frame_buffer) == 0:
             print("No frames available.")
             return None
@@ -234,34 +241,39 @@ class FrameProcessor:
 
         count = 0
         start_time = time.time()
+        timeout_seconds = (
+            max(30.0, float(num_images) * 10.0)
+            if timeout_seconds is None
+            else float(timeout_seconds)
+        )
+        deadline = time.monotonic() + timeout_seconds
 
         while count < num_images:
-            try:
-                self.root.update_idletasks()
-                self.root.update()
+            if cancel_check is not None:
+                cancel_check()
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Timed out after {timeout_seconds:g} seconds waiting "
+                    "for a fresh camera frame."
+                )
+            data = self.frame_buffer[-1]
 
-                data = self.frame_buffer[-1]
+            if data["stage_busy"]:
+                time.sleep(0.05)
+                continue
 
-                if data["stage_busy"]:
-                    time.sleep(0.05)
-                    continue
+            if data["frame_id"] <= self.last_used_capture_frame_id:
+                time.sleep(0.05)
+                continue
 
-                if data["frame_id"] <= self.last_used_capture_frame_id:
-                    time.sleep(0.05)
-                    continue
+            if data["timestamp"] < start_time:
+                time.sleep(0.05)
+                continue
 
-                if data["timestamp"] < start_time:
-                    time.sleep(0.05)
-                    continue
+            self.last_used_capture_frame_id = data["frame_id"]
 
-                self.last_used_capture_frame_id = data["frame_id"]
-
-                sum_frame += data["frame"].astype(np.float32)
-                count += 1
-
-            except Exception as e:
-                print(f"Error occurred while capturing frame: {e}")
-                break
+            sum_frame += data["frame"].astype(np.float32)
+            count += 1
 
         if count == 0:
             return None
@@ -271,7 +283,14 @@ class FrameProcessor:
 
         return avg_frame
 
-    def capture_frame_raw(self, num_images=100):
+    def capture_frame_raw(
+        self,
+        num_images=100,
+        cancel_check=None,
+        timeout_seconds=None,
+    ):
+        if cancel_check is not None:
+            cancel_check()
         if len(self.frame_buffer) == 0:
             print("No frames available.")
             return None
@@ -283,31 +302,39 @@ class FrameProcessor:
 
         count = 0
         start_time = time.time()
+        timeout_seconds = (
+            max(30.0, float(num_images) * 10.0)
+            if timeout_seconds is None
+            else float(timeout_seconds)
+        )
+        deadline = time.monotonic() + timeout_seconds
 
         while count < num_images:
-            try:
-                data = self.frame_buffer[-1]
+            if cancel_check is not None:
+                cancel_check()
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Timed out after {timeout_seconds:g} seconds waiting "
+                    "for fresh raw camera frames."
+                )
+            data = self.frame_buffer[-1]
 
-                if data["stage_busy"]:
-                    time.sleep(0.05)
-                    continue
+            if data["stage_busy"]:
+                time.sleep(0.05)
+                continue
 
-                if data["frame_id"] <= self.last_used_capture_frame_id:
-                    time.sleep(0.05)
-                    continue
+            if data["frame_id"] <= self.last_used_capture_frame_id:
+                time.sleep(0.05)
+                continue
 
-                if data["timestamp"] < start_time:
-                    time.sleep(0.05)
-                    continue
+            if data["timestamp"] < start_time:
+                time.sleep(0.05)
+                continue
 
-                self.last_used_capture_frame_id = data["frame_id"]
+            self.last_used_capture_frame_id = data["frame_id"]
 
-                sum_frame += data["frame"].astype(np.float32)
-                count += 1
-
-            except Exception:
-                print("Frame timeout")
-                break
+            sum_frame += data["frame"].astype(np.float32)
+            count += 1
 
         if count == 0:
             print("No frames captured.")

@@ -1,8 +1,11 @@
 from ctypes import WinDLL, create_string_buffer
 import os
+import threading
 import time
 
 class stage:
+    DEFAULT_WAIT_TIMEOUT_SECONDS = 120
+
     def __init__(self, port_num, sdk_path):
         self.port_num = port_num
         self.sdk_path = sdk_path
@@ -19,6 +22,10 @@ class stage:
         self.x = 0
         self.y = 0
         self.z = 0.0
+        # The camera callback, UI controls, and scan worker all query the same
+        # SDK session and shared response buffer.  Keep each command/response
+        # pair atomic so their replies cannot overwrite one another.
+        self._cmd_lock = threading.RLock()
 
         self._connect()
         self.initialize_stage()
@@ -50,13 +57,14 @@ class stage:
         self.cmd(f"controller.connect {self.port_num}")
 
     def cmd(self, msg):
-        ret = self.sdk.PriorScientificSDK_cmd(
-            self.session_id,
-            create_string_buffer(msg.encode()),
-            self.rx
-        )
+        with self._cmd_lock:
+            ret = self.sdk.PriorScientificSDK_cmd(
+                self.session_id,
+                create_string_buffer(msg.encode()),
+                self.rx
+            )
 
-        response = self.rx.value.decode().strip()
+            response = self.rx.value.decode().strip()
 
         return ret, response
 
@@ -83,13 +91,41 @@ class stage:
 
         return stage_busy != "0" or z_busy != "0"
 
-    def wait_until_not_busy(self):
-        start_time = time.time()
+    def wait_until_not_busy(self, timeout=None, cancel_check=None):
+        start_time = time.monotonic()
+        if timeout is None:
+            timeout = self.DEFAULT_WAIT_TIMEOUT_SECONDS
 
-        while self.is_busy():
+        while True:
+            if cancel_check is not None:
+                try:
+                    cancel_check()
+                except Exception:
+                    # A cancelled scan must not leave a long-running move in
+                    # progress while its worker unwinds.
+                    try:
+                        self.stop_all()
+                    except Exception:
+                        pass
+                    raise
+
+            if not self.is_busy():
+                break
+
+            if (
+                timeout is not None
+                and time.monotonic() - start_time >= timeout
+            ):
+                try:
+                    self.stop_all()
+                except Exception:
+                    pass
+                raise TimeoutError(
+                    f"Stage remained busy for more than {timeout:g} seconds."
+                )
             time.sleep(0.05)
 
-        return time.time() - start_time
+        return time.monotonic() - start_time
 
     def stop_all(self):
         self.stop_x()
@@ -127,19 +163,35 @@ class stage:
 
     # ---------------- Absolute Movement ----------------
 
-    def move_to_xy(self, x, y, wait=True):
+    def move_to_xy(
+        self,
+        x,
+        y,
+        wait=True,
+        timeout=None,
+        cancel_check=None,
+    ):
         if self.is_busy():
             return False
 
         self.cmd(f"controller.stage.goto-position {int(x)} {int(y)}")
 
         if wait:
-            self.wait_until_not_busy()
+            self.wait_until_not_busy(
+                timeout=timeout,
+                cancel_check=cancel_check,
+            )
 
         self.get_position()
         return True
 
-    def move_to_z(self, z, wait=True):
+    def move_to_z(
+        self,
+        z,
+        wait=True,
+        timeout=None,
+        cancel_check=None,
+    ):
         if self.is_busy():
             return False
 
@@ -147,7 +199,10 @@ class stage:
         self.cmd(f"controller.z.goto-position {z_prior_units}")
 
         if wait:
-            self.wait_until_not_busy()
+            self.wait_until_not_busy(
+                timeout=timeout,
+                cancel_check=cancel_check,
+            )
 
         self.get_z_position()
         return True
@@ -278,6 +333,12 @@ class stage:
 
     # ---------------- Shutdown ----------------
 
-    def disconnect(self):
-        self.wait_until_not_busy()
-        self.cmd("controller.disconnect")
+    def disconnect(self, timeout=5):
+        try:
+            self.wait_until_not_busy(timeout=timeout)
+        except TimeoutError:
+            # Shutdown should remain finite even if the controller never
+            # clears its busy flag.
+            self.stop_all()
+        finally:
+            self.cmd("controller.disconnect")

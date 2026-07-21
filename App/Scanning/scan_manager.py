@@ -2,7 +2,7 @@ import time
 import threading
 import json
 import secrets
-from queue import Full, Queue
+from queue import Queue
 from datetime import datetime
 from pathlib import Path
 
@@ -45,6 +45,7 @@ class ScanManager:
         mapper,
         update_scan_status,
         set_scan_running=None,
+        ui_dispatch=None,
     ):
         self.root = root
         self.app = app
@@ -55,19 +56,93 @@ class ScanManager:
         self.mapper = mapper
         self.update_scan_status = update_scan_status
         self.set_scan_running = set_scan_running
+        self.ui_dispatch = ui_dispatch or (lambda callback, *args: callback(*args))
 
         self.resolution = self.app.get_resolution()
         self.scan_running = False
         self.scan_metadata = None
         self._stop_event = threading.Event()
+        self._scan_thread = None
+        self._scan_thread_lock = threading.Lock()
+        self._scan_execution_thread_id = None
+        self._scan_started_at = None
+        self._processing_error = None
 
     def is_scan_running(self):
-        return self.scan_running
+        with self._scan_thread_lock:
+            worker_alive = (
+                self._scan_thread is not None
+                and self._scan_thread.is_alive()
+            )
+        return self.scan_running or worker_alive
+
+    def is_scan_worker_thread(self):
+        with self._scan_thread_lock:
+            return (
+                self._scan_thread is threading.current_thread()
+                or self._scan_execution_thread_id == threading.get_ident()
+            )
+
+    def start_scan(self, on_error=None, **options):
+        """Run stage/camera scan work on one managed non-Tk worker."""
+        with self._scan_thread_lock:
+            if self.scan_running or (
+                self._scan_thread is not None
+                and self._scan_thread.is_alive()
+            ):
+                raise RuntimeError("A scan is already running.")
+            self._stop_event.clear()
+            worker = threading.Thread(
+                target=self._run_scan_worker,
+                args=(options, on_error),
+                name="scan-stage-control",
+                daemon=False,
+            )
+            self._scan_thread = worker
+            # Claim the hardware synchronously so no Tk callback can begin a
+            # manual move or camera reconfiguration before this worker runs.
+            try:
+                if self.set_scan_running is not None:
+                    self.set_scan_running(True)
+                worker.start()
+            except Exception:
+                self._scan_thread = None
+                if self.set_scan_running is not None:
+                    try:
+                        self.set_scan_running(False)
+                    except Exception:
+                        pass
+                raise
+        return worker
+
+    def _run_scan_worker(self, options, on_error):
+        try:
+            self.run_scan(**options)
+        except Exception as error:
+            if on_error is not None:
+                self.ui_dispatch(on_error, error)
+        finally:
+            with self._scan_thread_lock:
+                if self._scan_thread is threading.current_thread():
+                    self._scan_thread = None
+            # Also covers failures before run_scan reaches its own cleanup.
+            if self.set_scan_running is not None:
+                self.set_scan_running(False)
+
+    def wait_for_scan(self, timeout=None):
+        with self._scan_thread_lock:
+            worker = self._scan_thread
+        if worker is not None and worker is not threading.current_thread():
+            worker.join(timeout=timeout)
+        return not self.is_scan_running()
 
     def stop_scan(self):
-        if not self.scan_running:
+        if not self.is_scan_running():
             return
         self._stop_event.set()
+        focus_controller = getattr(self.app, "focus_controller", None)
+        if focus_controller is not None:
+            focus_controller.stop_auto_focus()
         self.update_scan_status(stage="Stopping...")
 
     def run_scan(
@@ -83,8 +158,14 @@ class ScanManager:
         if self.scan_running:
             raise RuntimeError("A scan is already running.")
 
+        with self._scan_thread_lock:
+            managed_worker = self._scan_thread is threading.current_thread()
+        if not managed_worker:
+            self._stop_event.clear()
+        self._scan_execution_thread_id = threading.get_ident()
         self.scan_running = True
-        self._stop_event.clear()
+        self._scan_started_at = time.monotonic()
+        self._processing_error = None
         self.resolution = self.app.get_resolution()
         if self.set_scan_running is not None:
             self.set_scan_running(True)
@@ -106,10 +187,10 @@ class ScanManager:
             "scan_profile_name": getattr(scan_profile, "name", None),
             "scan_profile_path": str(profile_path) if profile_path else None,
         }
-        if hasattr(self.app, "set_region_map_available"):
-            self.app.set_region_map_available(False)
+        self.update_scan_status(processing_state="Waiting")
 
         try:
+            self._wait_for_existing_focus()
             if scan_type in self.COMPLETE_SCAN_WINDOWS:
                 if detection_model not in ("Flake Detection", "Region Detection"):
                     raise ValueError(f"Unknown detection model: {detection_model}")
@@ -173,34 +254,82 @@ class ScanManager:
                 raise ValueError(f"Unknown scan type: {scan_type}")
 
             self._check_cancelled()
-            self.update_scan_status(stage="Complete", progress="100%")
+            self.update_scan_status(
+                stage="Complete",
+                progress="100%",
+                processing_state="Complete",
+                total_elapsed_time=self._total_elapsed_string(),
+            )
             return True
         except ScanCancelled:
-            self.update_scan_status(stage="Stopped", progress="Stopped")
+            self.update_scan_status(
+                stage="Stopped",
+                progress="Stopped",
+                processing_state="Stopped",
+                total_elapsed_time=self._total_elapsed_string(),
+            )
             return False
         except Exception:
-            self.update_scan_status(stage="Error", progress="Stopped")
+            self.update_scan_status(
+                stage="Error",
+                progress="Stopped",
+                processing_state="Error",
+                total_elapsed_time=self._total_elapsed_string(),
+            )
             raise
         finally:
             self.scan_running = False
+            self._scan_execution_thread_id = None
             if self.set_scan_running is not None:
                 self.set_scan_running(False)
+
+    def _total_elapsed_string(self):
+        elapsed = (
+            time.monotonic() - self._scan_started_at
+            if self._scan_started_at is not None
+            else 0.0
+        )
+        return time.strftime("%H:%M:%S", time.gmtime(max(0.0, elapsed)))
 
     def _check_cancelled(self):
         if self._stop_event.is_set():
             raise ScanCancelled("The scan was stopped.")
 
+    def _wait_for_stage(self):
+        self.stage.wait_until_not_busy(cancel_check=self._check_cancelled)
+
+    def _wait_for_existing_focus(self):
+        focus_controller = getattr(self.app, "focus_controller", None)
+        if focus_controller is None or not focus_controller.focus_running:
+            return
+        self.update_scan_status(processing_state="Waiting for autofocus")
+        while focus_controller.focus_running:
+            self._check_cancelled()
+            time.sleep(0.05)
+        self._wait_for_stage()
+
+    def _move_stage_xy(self, x, y):
+        self._wait_for_stage()
+        if not self.stage.move_to_xy(x, y, wait=False):
+            raise RuntimeError("The stage could not start the requested XY move.")
+        self._wait_for_stage()
+
+    def _change_objective(self, position):
+        self._check_cancelled()
+        self._wait_for_stage()
+        self.turret_controller.change_objective(
+            position,
+            cancel_check=self._check_cancelled,
+        )
+        self._wait_for_stage()
+
     def _process_ui_events(self):
-        self.root.update()
         self._check_cancelled()
 
     def _queue_image(self, image_queue, image_data):
-        while True:
-            try:
-                image_queue.put(image_data, timeout=0.1)
-                return
-            except Full:
-                self.root.update()
+        if self._processing_error is not None:
+            raise RuntimeError("Scan image processing failed.") from self._processing_error
+        image_queue.put(image_data)
 
     @staticmethod
     def _validate_window(window):
@@ -222,14 +351,6 @@ class ScanManager:
     ):
         self.app.set_live_mapping(False)
         self.app.open_panel("Scan Info Panel")
-        region_mapping = detection_model == "Region Detection"
-        if hasattr(self.app, "set_region_map_available"):
-            self.app.set_region_map_available(region_mapping)
-        if region_mapping and hasattr(self.app, "reset_region_map"):
-            self.app.reset_region_map(
-                "region-scan-pending",
-                self.app.get_true_map().shape,
-            )
         start_time = time.time()
         scan_path = HOME_DIR / "Scans" / datetime.now().strftime("Full Scan (%Y-%m-%d) (%H-%M-%S)")
         scan_magnification = scan_magnification.lower()
@@ -242,6 +363,7 @@ class ScanManager:
             progress="0%",
             stage_elapsed_time="00:00:00",
             total_elapsed_time="00:00:00",
+            processing_state="Preparing scan",
         )
         center_x, center_y, scale_2x = self.run_2x_scan(
             scan_path=scan_path,
@@ -252,7 +374,11 @@ class ScanManager:
         )
         self._check_cancelled()
 
-        true_map_bgr = cv2.cvtColor(self.app.get_true_map(), cv2.COLOR_RGB2BGR)
+        with self.app.get_map_state_lock():
+            true_map_bgr = cv2.cvtColor(
+                self.app.get_true_map(),
+                cv2.COLOR_RGB2BGR,
+            )
         filter_map = chip_detection.select_and_filter_map(
             map_image=true_map_bgr,
             save_path=scan_path / "Maps" / "map_2x_filtered.png",
@@ -265,9 +391,13 @@ class ScanManager:
             map_id="2x-filtered-map-1",
         )
         self._check_cancelled()
-        wafers, true_map = chip_detection.find_chips(filter_map, self.app.get_true_map())
+        # Work on private snapshots so the Tk renderer never waits on
+        # full-resolution contour detection or annotation drawing.
+        with self.app.get_map_state_lock():
+            chip_map = self.app.get_true_map().copy()
+        wafers, chip_map = chip_detection.find_chips(filter_map, chip_map)
+        self.app.set_true_map(chip_map)
         print("Scan areas found")
-        self.app.set_true_map(true_map)
         print("True map set")
 
         coordinate_generator_function = (
@@ -275,16 +405,21 @@ class ScanManager:
             if scan_magnification == "10x"
             else coordinate_generator.generate_20x_scan_coordinates
         )
+        scan_window_rgb = chip_map.copy()
         scan_coordinates = coordinate_generator_function(
             self.app,
             wafers,
             center_x,
             center_y,
             scale_2x,
-            self.app.get_true_map(),
+            scan_window_rgb,
             self.camera.get_Size(),
         )
-        scan_window_map = cv2.cvtColor(self.app.get_true_map(), cv2.COLOR_RGB2BGR)
+        self.app.set_true_map(scan_window_rgb)
+        scan_window_map = cv2.cvtColor(
+            scan_window_rgb,
+            cv2.COLOR_RGB2BGR,
+        )
         self.frame_processor.save_image(
             image=scan_window_map,
             save_dir=scan_path / "Maps",
@@ -294,22 +429,39 @@ class ScanManager:
         print("Scan coordinates created")
         self._check_cancelled()
 
-        image_queue = Queue(maxsize=200)
+        image_queue = Queue()
         print("Queue made")
         flake_detector = flake_detection.Flake_Detector()
+
+        def report_processing(processed_count, queued_count):
+            self.update_scan_status(
+                processing_state=(
+                    f"Processing images: {processed_count} processed, "
+                    f"{queued_count} queued"
+                )
+            )
+
+        def run_detection():
+            try:
+                flake_detector.flake_detection(
+                    image_queue=image_queue,
+                    frame_processor=self.frame_processor,
+                    stop_requested=self._stop_event.is_set,
+                    detection_model=detection_model,
+                    profile_path=profile_path,
+                    scan_path=scan_path,
+                    progress_callback=report_processing,
+                )
+            except Exception as error:
+                self._processing_error = error
+
         flake_detection_thread = threading.Thread(
-            target=flake_detector.flake_detection,
-            kwargs={
-                "image_queue": image_queue,
-                "frame_processor": self.frame_processor,
-                "stop_requested": self._stop_event.is_set,
-                "detection_model": detection_model,
-                "profile_path": profile_path,
-                "scan_path": scan_path,
-            },
-            daemon=True,
+            target=run_detection,
+            name="scan-image-processing",
+            daemon=False,
         )
         flake_detection_thread.start()
+        self.update_scan_status(processing_state="Waiting for captured images")
         print("Started flake detection thread")
 
         try:
@@ -325,17 +477,27 @@ class ScanManager:
                 full_scan=True,
                 full_scan_start_time=start_time,
                 image_queue=image_queue,
-                region_mapping=region_mapping,
             )
         finally:
+            self.update_scan_status(
+                processing_state=(
+                    "Stopping image processing"
+                    if self._stop_event.is_set()
+                    else "Finishing saved images"
+                )
+            )
             image_queue.put(None)
             while flake_detection_thread.is_alive():
                 flake_detection_thread.join(timeout=0.1)
-                if region_mapping and self.app.get_view() == "Map":
-                    self.app.display_map()
-                self.root.update()
+            self.update_scan_status(processing_state="Building result maps")
             self._build_saved_scan_maps(scan_path, scan_magnification)
-            self.turret_controller.change_objective(1)
+            self.update_scan_status(processing_state="Restoring objective")
+            if not self._stop_event.is_set():
+                self._change_objective(1)
+
+        if self._processing_error is not None:
+            raise RuntimeError("Scan image processing failed.") from self._processing_error
+        self.update_scan_status(processing_state="Complete")
 
         print("Full scan finished!")
         print(f"Time taken: {time.time() - start_time:.2f}s")
@@ -480,6 +642,8 @@ class ScanManager:
         self.app.set_live_mapping(False)
         self.app.open_panel("Scan Info Panel")
         print("2x scan running...")
+        if not full_scan:
+            self.update_scan_status(processing_state="Not required")
 
         if scan_path is None:
             path = HOME_DIR / "Scans" / datetime.now().strftime("2x (%Y-%m-%d) (%H-%M-%S)")
@@ -508,7 +672,6 @@ class ScanManager:
         zoom=4,
         full_scan=False,
         full_scan_start_time=None,
-        region_mapping=False,
     ):
         self._check_cancelled()
         self.app.set_live_mapping(False)
@@ -518,8 +681,7 @@ class ScanManager:
         start_time = time.time()
 
         self.app.set_view("Map")
-        self.turret_controller.change_objective(2)
-        self.stage.wait_until_not_busy()
+        self._change_objective(2)
 
         if scan_path is None:
             path = HOME_DIR / "Scans" / datetime.now().strftime("10x (%Y-%m-%d) (%H-%M-%S)")
@@ -537,27 +699,20 @@ class ScanManager:
             wafer_time = time.time()
 
             self.app.set_true_map(np.zeros((MAP_SIZE, MAP_SIZE, 3), dtype=np.uint8))
-            region_map_id = f"10x-wafer-{i}"
-            if region_mapping and hasattr(self.app, "reset_region_map"):
-                self.app.reset_region_map(
-                    region_map_id,
-                    self.app.get_true_map().shape,
-                )
+            map_id = f"10x-wafer-{i}"
 
             if full_scan:
                 self.update_scan_status(stage=f"10x Scan - Wafer {i} / {len(scan_coordinates_10x)}", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
             else:
-                self.update_scan_status(scan_type="10x Scan", stage="10x Scan", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
+                self.update_scan_status(scan_type="10x Scan", stage="10x Scan", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00", processing_state="Not required")
 
             center_x = coordinates[0]
             center_y = coordinates[1]
 
             coords, total_frames = coordinate_generator.generate_rect_coords(coordinates[2], coordinates[3])
 
-            self.stage.move_to_xy(center_x, center_y)
+            self._move_stage_xy(center_x, center_y)
             print(f"Moving to: ({center_x}, {center_y})")
-
-            self.stage.wait_until_not_busy()
 
             camera_width, camera_height = self.camera.get_Size()
 
@@ -572,10 +727,11 @@ class ScanManager:
                 target_x = center_x + offset_x * PIXEL_SIZE["10X"][self.resolution] * RESOLUTION_DIM[self.resolution]["x"] * CROP_RATIO["10X"]["x"]
                 target_y = center_y - offset_y * PIXEL_SIZE["10X"][self.resolution] * RESOLUTION_DIM[self.resolution]["y"] * CROP_RATIO["10X"]["y"]
 
-                self.stage.move_to_xy(target_x, target_y)
-                self.stage.wait_until_not_busy()
+                self._move_stage_xy(target_x, target_y)
 
-                img = self.frame_processor.capture_frame()
+                img = self.frame_processor.capture_frame(
+                    cancel_check=self._check_cancelled,
+                )
 
                 img = self.frame_processor.apply_vignette_filter(img)
 
@@ -595,7 +751,7 @@ class ScanManager:
                     filename=image_path,
                     vignette_applied=True,
                     metadata={
-                        "map_id": region_map_id,
+                        "map_id": map_id,
                         "map_index": i,
                         "map_x": map_x,
                         "map_y": map_y,
@@ -610,10 +766,11 @@ class ScanManager:
                 )
 
                 if self.app.get_view() == "Camera View":
-                    if self.app.get_filter():
-                        self.app.set_filter(False)
-
-                    self.root.after(0, lambda img=img: self.app.display_image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)))
+                    self.app.set_filter(False)
+                    self.ui_dispatch(
+                        self.app.display_image,
+                        cv2.cvtColor(img, cv2.COLOR_BGR2RGB),
+                    )
 
                 if image_queue is not None:
                     self._queue_image(image_queue, {
@@ -622,10 +779,6 @@ class ScanManager:
                         "stage_y": float(target_y),
                         "magnification": "10X",
                         "pixel_size_um": float(PIXEL_SIZE["10X"][self.resolution]),
-                        "region_map_id": region_map_id,
-                        "map_x": map_x,
-                        "map_y": map_y,
-                        "map_zoom": max_zoom,
                     })
 
                 x_start = max(0, map_x)
@@ -635,9 +788,10 @@ class ScanManager:
                 width = min(img_small.shape[1] - source_x, true_map.shape[1] - x_start)
                 height = min(img_small.shape[0] - source_y, true_map.shape[0] - y_start)
                 if width > 0 and height > 0:
-                    true_map[y_start:y_start + height, x_start:x_start + width] = (
-                        img_small[source_y:source_y + height, source_x:source_x + width]
-                    )
+                    with self.app.get_map_state_lock():
+                        true_map[y_start:y_start + height, x_start:x_start + width] = (
+                            img_small[source_y:source_y + height, source_x:source_x + width]
+                        )
 
                 self.app.display_map()
 
@@ -682,7 +836,6 @@ class ScanManager:
         zoom=4,
         full_scan=False,
         full_scan_start_time=None,
-        region_mapping=False,
     ):
         self._check_cancelled()
         self.app.set_live_mapping(False)
@@ -692,8 +845,8 @@ class ScanManager:
         start_time = time.time()
 
         self.app.set_view("Map")
-        self.turret_controller.change_objective(2)
-        self.turret_controller.change_objective(3)
+        self._change_objective(2)
+        self._change_objective(3)
 
         if scan_path is None:
             path = HOME_DIR / "Scans" / datetime.now().strftime("20x (%Y-%m-%d) (%H-%M-%S)")
@@ -711,26 +864,20 @@ class ScanManager:
             wafer_time = time.time()
 
             self.app.set_true_map(np.zeros((MAP_SIZE, MAP_SIZE, 3), dtype=np.uint8))
-            region_map_id = f"20x-wafer-{i}"
-            if region_mapping and hasattr(self.app, "reset_region_map"):
-                self.app.reset_region_map(
-                    region_map_id,
-                    self.app.get_true_map().shape,
-                )
+            map_id = f"20x-wafer-{i}"
 
             if full_scan:
                 self.update_scan_status(stage=f"20x Scan - Wafer {i} / {len(scan_coordinates_20x)}", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
             else:
-                self.update_scan_status(scan_type="20x Scan", stage="20x Scan", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
+                self.update_scan_status(scan_type="20x Scan", stage="20x Scan", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00", processing_state="Not required")
 
             center_x = coordinates[0]
             center_y = coordinates[1]
 
             coords, total_frames = coordinate_generator.generate_rect_coords(coordinates[2], coordinates[3])
 
-            self.stage.move_to_xy(center_x, center_y)
+            self._move_stage_xy(center_x, center_y)
             print(f"Moving to: ({center_x}, {center_y})")
-            self.stage.wait_until_not_busy()
 
             camera_width, camera_height = self.camera.get_Size()
 
@@ -745,10 +892,11 @@ class ScanManager:
                 target_x = center_x + offset_x * PIXEL_SIZE["20X"][self.resolution] * RESOLUTION_DIM[self.resolution]["x"] * CROP_RATIO["20X"]["x"]
                 target_y = center_y - offset_y * PIXEL_SIZE["20X"][self.resolution] * RESOLUTION_DIM[self.resolution]["y"] * CROP_RATIO["20X"]["y"]
 
-                self.stage.move_to_xy(target_x, target_y)
-                self.stage.wait_until_not_busy()
+                self._move_stage_xy(target_x, target_y)
 
-                img = self.frame_processor.capture_frame()
+                img = self.frame_processor.capture_frame(
+                    cancel_check=self._check_cancelled,
+                )
 
                 img = self.frame_processor.apply_vignette_filter(img)
 
@@ -768,7 +916,7 @@ class ScanManager:
                     filename=image_path,
                     vignette_applied=True,
                     metadata={
-                        "map_id": region_map_id,
+                        "map_id": map_id,
                         "map_index": i,
                         "map_x": map_x,
                         "map_y": map_y,
@@ -783,10 +931,11 @@ class ScanManager:
                 )
 
                 if self.app.get_view() == "Camera View":
-                    if self.app.get_filter():
-                        self.app.set_filter(False)
-
-                    self.root.after(0, lambda img=img: self.app.display_image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)))
+                    self.app.set_filter(False)
+                    self.ui_dispatch(
+                        self.app.display_image,
+                        cv2.cvtColor(img, cv2.COLOR_BGR2RGB),
+                    )
 
                 if image_queue is not None:
                     self._queue_image(image_queue, {
@@ -795,10 +944,6 @@ class ScanManager:
                         "stage_y": float(target_y),
                         "magnification": "20X",
                         "pixel_size_um": float(PIXEL_SIZE["20X"][self.resolution]),
-                        "region_map_id": region_map_id,
-                        "map_x": map_x,
-                        "map_y": map_y,
-                        "map_zoom": max_zoom,
                     })
 
                 x_start = max(0, map_x)
@@ -808,9 +953,10 @@ class ScanManager:
                 width = min(img_small.shape[1] - source_x, true_map.shape[1] - x_start)
                 height = min(img_small.shape[0] - source_y, true_map.shape[0] - y_start)
                 if width > 0 and height > 0:
-                    true_map[y_start:y_start + height, x_start:x_start + width] = (
-                        img_small[source_y:source_y + height, source_x:source_x + width]
-                    )
+                    with self.app.get_map_state_lock():
+                        true_map[y_start:y_start + height, x_start:x_start + width] = (
+                            img_small[source_y:source_y + height, source_x:source_x + width]
+                        )
 
                 self.app.display_map()
 
@@ -947,13 +1093,15 @@ class ScanManager:
             progress="0%",
             stage_elapsed_time="00:00:00",
             total_elapsed_time="00:00:00",
+            processing_state="Finding regions",
         )
 
-        self.turret_controller.change_objective(2)
-        self.stage.wait_until_not_busy()
+        self._change_objective(2)
         self._check_cancelled()
         source_x, source_y, source_z = self.stage.get_position()
-        source_image = self.frame_processor.capture_frame()
+        source_image = self.frame_processor.capture_frame(
+            cancel_check=self._check_cancelled,
+        )
         if source_image is None:
             raise RuntimeError("The camera did not return a 10x image.")
         source_image = self.frame_processor.apply_vignette_filter(source_image)
@@ -1048,11 +1196,11 @@ class ScanManager:
             )
         group_threshold_um = float(group_threshold_um)
         capture_groups = self._group_nearby_regions(regions, group_threshold_um)
+        self.update_scan_status(processing_state="Region processing complete")
 
         if capture_groups:
             self.update_scan_status(stage="Capturing regions at 100x", progress="0%")
-            self.turret_controller.change_objective(3)
-            self.stage.wait_until_not_busy()
+            self._change_objective(3)
             navigation_offset_x = RELATIVE_XY["20X"]["X"] - RELATIVE_XY["10X"]["X"]
             navigation_offset_y = RELATIVE_XY["20X"]["Y"] - RELATIVE_XY["10X"]["Y"]
 
@@ -1061,18 +1209,18 @@ class ScanManager:
                 target = capture_group["target_position_10x_um"]
                 navigation_x = target["x"] + navigation_offset_x
                 navigation_y = target["y"] + navigation_offset_y
-                self.stage.move_to_xy(navigation_x, navigation_y)
-                self.stage.wait_until_not_busy()
+                self._move_stage_xy(navigation_x, navigation_y)
                 navigation_position = {
                     "x": round(navigation_x, 6),
                     "y": round(navigation_y, 6),
                 }
 
                 try:
-                    self.turret_controller.change_objective(5)
-                    self.stage.wait_until_not_busy()
+                    self._change_objective(5)
                     capture_x, capture_y, capture_z = self.stage.get_position()
-                    image_100x = self.frame_processor.capture_frame()
+                    image_100x = self.frame_processor.capture_frame(
+                        cancel_check=self._check_cancelled,
+                    )
                     if image_100x is None:
                         raise RuntimeError(
                             f"The camera did not return 100x image {index}."
@@ -1085,8 +1233,8 @@ class ScanManager:
                         vignette_applied=False,
                     )
                 finally:
-                    self.turret_controller.change_objective(3)
-                    self.stage.wait_until_not_busy()
+                    if not self._stop_event.is_set():
+                        self._change_objective(3)
 
                 relative_image_path = Path(saved_path).relative_to(scan_path).as_posix()
                 capture_position = {
@@ -1172,7 +1320,7 @@ class ScanManager:
 
         center_x, center_y, _ = self.stage.get_position()
         coords, total_frames = coordinate_generator.generate_rect_coords(*window)
-        self.update_scan_status(scan_type="Vignette Filter", stage="Vignette Filter", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00")
+        self.update_scan_status(scan_type="Vignette Filter", stage="Vignette Filter", progress="0%", stage_elapsed_time="00:00:00", total_elapsed_time="00:00:00", processing_state="Capturing filter images")
         step_x = 300
         step_y = 300
 
@@ -1193,10 +1341,12 @@ class ScanManager:
                 target_x = center_x + offset_x * step_x
                 target_y = center_y - offset_y * step_y
 
-                self.stage.move_to_xy(target_x, target_y)
-                self.stage.wait_until_not_busy()
+                self._move_stage_xy(target_x, target_y)
 
-                img = self.frame_processor.capture_frame_raw(num_images=10)
+                img = self.frame_processor.capture_frame_raw(
+                    num_images=10,
+                    cancel_check=self._check_cancelled,
+                )
                 if img is not None and output:
                     print(f"Captured Image {i}/{total_frames}")
 
@@ -1223,10 +1373,12 @@ class ScanManager:
                 )
                 self._process_ui_events()
         finally:
-            self.stage.move_to_xy(center_x, center_y)
+            if not self._stop_event.is_set():
+                self._move_stage_xy(center_x, center_y)
 
         print("Vignette filter imaging finished!")
         print(f"Time taken: {time.time() - start_time:.2f}s")
+        self.update_scan_status(processing_state="Building vignette filter")
         sum_img = None
         count = 0
 

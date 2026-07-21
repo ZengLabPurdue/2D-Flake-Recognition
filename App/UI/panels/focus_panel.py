@@ -152,6 +152,8 @@ class FocusPanel:
         self.sharpness_var.set(f"Sharpness: {sharpness:.3f}")
 
     def run_auto_focus(self):
+        if not self.app.hardware_controls_available():
+            return
         try:
             focus_range = int(self.range_var.get())
             z_velo = int(self.velocity_var.get())

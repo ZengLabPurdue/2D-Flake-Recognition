@@ -54,7 +54,7 @@ class turret:
 
         self.is_moving = False
 
-    def send_command(self, command, timeout=5):
+    def send_command(self, command, timeout=5, cancel_check=None):
 
         self.Usart.reset_input_buffer()
 
@@ -63,11 +63,14 @@ class turret:
         #print(f"Sending: {command}")
         self.Usart.write(full_cmd)
 
-        start = t.time()
+        start = t.monotonic()
 
         while True:
 
-            if t.time() - start > timeout:
+            if cancel_check is not None:
+                cancel_check()
+
+            if t.monotonic() - start > timeout:
                 raise TimeoutError(f"Timeout waiting for response to {command}")
 
             response = self.Usart.readline()
@@ -105,7 +108,13 @@ class turret:
             return False
         '''
     
-    def turn_to_position(self, value, output=False):
+    def turn_to_position(
+        self,
+        value,
+        output=False,
+        timeout=30,
+        cancel_check=None,
+    ):
 
         if not 1 <= value <= NUM_OBJECTIVES:
             raise ValueError("Turret position must be 1–5")
@@ -119,10 +128,25 @@ class turret:
         try:
             if output: print(f"Moving turret to position {value}")
 
-            self.send_command(f"1OB {value}")
+            self.send_command(
+                f"1OB {value}",
+                cancel_check=cancel_check,
+            )
+
+            started_at = t.monotonic()
 
             while True:
-                pos = self.check_position()
+                if cancel_check is not None:
+                    cancel_check()
+                if (
+                    timeout is not None
+                    and t.monotonic() - started_at >= timeout
+                ):
+                    raise TimeoutError(
+                        f"Turret did not reach position {value} within "
+                        f"{timeout:g} seconds."
+                    )
+                pos = self.check_position(cancel_check=cancel_check)
                 if pos == value:
                     break
                 t.sleep(0.1)
@@ -132,9 +156,12 @@ class turret:
         finally:
             self.is_moving = False
     
-    def check_position(self, output=False):
+    def check_position(self, output=False, cancel_check=None):
 
-        response = self.send_command("1OB?")
+        response = self.send_command(
+            "1OB?",
+            cancel_check=cancel_check,
+        )
 
         try:
             parts = response.split()

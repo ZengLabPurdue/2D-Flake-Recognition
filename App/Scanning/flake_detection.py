@@ -29,6 +29,7 @@ class Flake_Detector:
         detection_model="Flake Detection",
         profile_path=None,
         scan_path=None,
+        progress_callback=None,
     ):
         if detection_model not in ("Flake Detection", "Region Detection"):
             raise ValueError(f"Unknown detection model: {detection_model}")
@@ -38,9 +39,12 @@ class Flake_Detector:
         scan_path = Path(scan_path) if scan_path is not None else None
         detection_records = []
         color_seed = secrets.randbits(32) if detection_model == "Region Detection" else None
+        processed_count = 0
 
         try:
             while True:
+                if stop_requested is not None and stop_requested():
+                    break
                 image_data = image_queue.get()
                 try:
                     if image_data is None:
@@ -60,32 +64,16 @@ class Flake_Detector:
                     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
                     if detection_model == "Region Detection":
-                        scanned_img, detections, save, segmented_img = (
+                        scanned_img, detections, save = (
                             self.flake_identifier.identify_flakes_region_model(
                                 img,
                                 profile_path,
                                 color_seed=color_seed,
-                                return_segmented_map=True,
                             )
                         )
                     else:
                         scanned_img, detections, save = (
                             self.flake_identifier.identify_flakes_flake_model(img)
-                        )
-                        segmented_img = None
-
-                    app = getattr(frame_processor, "app", None)
-                    if (
-                        segmented_img is not None
-                        and app is not None
-                        and hasattr(app, "place_region_map_frame")
-                    ):
-                        app.place_region_map_frame(
-                            image_data.get("region_map_id"),
-                            segmented_img,
-                            image_data.get("map_x"),
-                            image_data.get("map_y"),
-                            image_data.get("map_zoom"),
                         )
 
                     for detection in detections:
@@ -122,6 +110,13 @@ class Flake_Detector:
                         )
                 finally:
                     image_queue.task_done()
+                    if image_data is not None:
+                        processed_count += 1
+                        if progress_callback is not None:
+                            progress_callback(
+                                processed_count,
+                                image_queue.qsize(),
+                            )
         finally:
             if scan_path is not None:
                 self._save_detection_records(
