@@ -222,7 +222,7 @@ class FrameProcessor:
         max_speed = self.hcam.MaxSpeed()
         self.hcam.put_Speed(max_speed)
 
-    def capture_frame(self, num_images=2): #TODO: Figure out last position mixing bug
+    def capture_frame(self, num_images=1): #TODO: Figure out last position mixing bug
         if len(self.frame_buffer) == 0:
             print("No frames available.")
             return None

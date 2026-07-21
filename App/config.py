@@ -7,6 +7,9 @@ HOME_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
 
 PROCESS_FRAME_RATE = 30
 
+# Fixed planning/export canvas. Interactive Scan Results use sparse source tiles.
+MAP_SIZE = 10000
+
 DEFAULT_EXPOSURE = 60
 
 CROP_RATIO = {

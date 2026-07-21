@@ -1,10 +1,22 @@
 import re
 from pathlib import Path
 
-import cv2
 import tkinter as tk
 from tkinter import Frame, Label, filedialog, messagebox
 from tkinter import ttk
+
+from UI.sparse_tile_viewer import SparseTileViewer
+
+
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp"}
+
+
+def _natural_sort_key(value):
+    return tuple(
+        (1, int(part)) if part.isdigit() else (0, part.casefold())
+        for part in re.split(r"(\d+)", str(value))
+    )
+
 
 class ViewScansPanel:
     def __init__(
@@ -22,6 +34,13 @@ class ViewScansPanel:
         self.view_scan_path = None
         self.view_folder = None
         self.image_files = None
+        self.selected_view = None
+        self.sparse_map_mode = False
+        self.chip_root = None
+        self.chip_source_folder = None
+        self.magnification_roots = {}
+        self.available_result_views = set()
+        self.tile_viewer = SparseTileViewer(self.app.scan_results_canvas)
 
         self.results_menu = None
         self.open_scan_menu = None
@@ -79,6 +98,7 @@ class ViewScansPanel:
             state="readonly"
         )
         self.chip_dropdown.place(relx=0.5, y=self.pos_chip, anchor="n", width=184)
+        self.chip_dropdown.bind("<<ComboboxSelected>>", self._on_chip_selected)
 
         self.image_var = tk.StringVar(value="Image: None")
 
@@ -99,6 +119,12 @@ class ViewScansPanel:
         )
         self.button_panel.place(relx=0.5, x=0, y=self.pos_buttons, anchor="n")
         self.button_panel.pack_propagate(False)
+
+        self.fit_map_button = ttk.Button(
+            self.background,
+            text="Fit Map",
+            command=self.tile_viewer.fit_to_view,
+        )
 
         controls = Frame(self.button_panel, bg="white")
         controls.pack(expand=True, fill="both")
@@ -129,23 +155,7 @@ class ViewScansPanel:
         self.results_menu.add_separator()
 
         self.open_scan_menu = tk.Menu(self.results_menu, tearoff=0)
-
-        self.open_scan_menu.add_command(
-            label="Raw Images (2x)",
-            command=lambda: self.set_view_folder("Raw 2x")
-        )
-        self.open_scan_menu.add_command(
-            label="Raw Images (10x)",
-            command=lambda: self.set_view_folder("Raw 10x")
-        )
-        self.open_scan_menu.add_command(
-            label="Processed Images (10x)",
-            command=lambda: self.set_view_folder("Processed 10x")
-        )
-        self.open_scan_menu.add_command(
-            label="Detected Flakes",
-            command=lambda: self.set_view_folder("Flakes Found")
-        )
+        self._rebuild_open_scan_menu()
 
         self.results_menu.add_cascade(
             label="View Scan",
@@ -161,12 +171,171 @@ class ViewScansPanel:
 
         parent_menu.add_cascade(label="Results", menu=self.results_menu)
 
+    def _rebuild_open_scan_menu(self):
+        if self.open_scan_menu is None:
+            return
+        self.open_scan_menu.delete(0, "end")
+
+        groups = []
+        two_x_items = []
+        if "Raw 2x" in self.available_result_views:
+            two_x_items.append(("2x Map", "Raw 2x", "normal"))
+        elif self.view_scan_path is None:
+            two_x_items.append(("2x Map", "Raw 2x", "disabled"))
+        if "Filtered 2x" in self.available_result_views:
+            two_x_items.append(("Filtered 2x Map", "Filtered 2x", "normal"))
+        if "Scan Windows" in self.available_result_views:
+            two_x_items.append(("2x Scan Windows", "Scan Windows", "normal"))
+        if two_x_items:
+            groups.append(two_x_items)
+
+        for magnification in ("10x", "20x"):
+            items = []
+            raw_view = f"Raw {magnification[:-1]}x"
+            processed_view = f"Processed {magnification[:-1]}x"
+            if raw_view in self.available_result_views:
+                items.append((f"{magnification} Map", raw_view, "normal"))
+            if processed_view in self.available_result_views:
+                items.append(
+                    (
+                        f"Processed {magnification} Map",
+                        processed_view,
+                        "normal",
+                    )
+                )
+            if items:
+                groups.append(items)
+
+        groups.append([
+            (
+                "Detected Flakes",
+                "Flakes Found",
+                (
+                    "normal"
+                    if "Flakes Found" in self.available_result_views
+                    else "disabled"
+                ),
+            )
+        ])
+
+        for group_index, group in enumerate(groups):
+            if group_index:
+                self.open_scan_menu.add_separator()
+            for label, selected_view, state in group:
+                self.open_scan_menu.add_command(
+                    label=label,
+                    state=state,
+                    command=lambda view=selected_view: self.set_view_folder(view),
+                )
+
+    def _discover_result_layers(self):
+        roots = {}
+        available = set()
+        if self.view_scan_path is None:
+            return roots, available
+
+        all_images = self.view_scan_path / "All Images"
+        try:
+            candidates = [path for path in all_images.iterdir() if path.is_dir()]
+        except OSError:
+            candidates = []
+        for candidate in candidates:
+            normalized = re.sub(r"[\s_-]+", "", candidate.name).casefold()
+            if normalized in {"2x", "10x", "20x"}:
+                roots[normalized] = candidate
+
+        maps = self.view_scan_path / "Maps"
+        two_x_root = roots.get("2x")
+        if (
+            self._folder_has_images(self._named_child(two_x_root, "Raw"))
+            or (maps / "map_2x.png").is_file()
+        ):
+            available.add("Raw 2x")
+        if (
+            self._folder_has_images(self._named_child(two_x_root, "Filtered"))
+            or (maps / "map_2x_filtered.png").is_file()
+        ):
+            available.add("Filtered 2x")
+        if (maps / "map_2x_scan_windows.png").is_file():
+            available.add("Scan Windows")
+
+        for magnification in ("10x", "20x"):
+            root = roots.get(magnification)
+            if self._chip_folders(root, source_name="Raw"):
+                available.add(f"Raw {magnification[:-1]}x")
+            if self._chip_folders(root, source_name="Processed"):
+                available.add(f"Processed {magnification[:-1]}x")
+
+        flakes_root = self.view_scan_path / "Flakes Found"
+        if self._chip_folders(flakes_root, require_images=True):
+            available.add("Flakes Found")
+        return roots, available
+
+    def _magnification_root(self, magnification, base_path):
+        return (
+            self.magnification_roots.get(magnification.casefold())
+            or self._named_child(base_path, magnification)
+            or base_path / magnification
+        )
+
+    @staticmethod
+    def _named_child(parent, name):
+        if parent is None or not parent.is_dir():
+            return None
+        try:
+            for child in parent.iterdir():
+                if child.is_dir() and child.name.casefold() == name.casefold():
+                    return child
+        except OSError:
+            return None
+        return None
+
+    @staticmethod
+    def _folder_has_images(folder):
+        if folder is None or not folder.is_dir():
+            return False
+        try:
+            return any(
+                path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
+                for path in folder.iterdir()
+            )
+        except OSError:
+            return False
+
+    def _chip_folders(self, root, source_name=None, require_images=False):
+        if root is None or not root.is_dir():
+            return []
+        try:
+            folders = sorted(
+                [path for path in root.iterdir() if path.is_dir()],
+                key=lambda folder: _natural_sort_key(folder.name),
+            )
+        except OSError:
+            return []
+
+        matching = []
+        for folder in folders:
+            if source_name is not None:
+                source_folder = self._named_child(folder, source_name)
+                if not self._folder_has_images(source_folder):
+                    continue
+            elif require_images and not self._folder_has_images(folder):
+                continue
+            matching.append(folder)
+        return matching
+
     def show(self):
         self.app.close_all_panels()
         self.frame.place(relx=0.0, rely=0.0, anchor="nw")
 
     def hide(self):
         self.frame.place_forget()
+
+    def pause(self):
+        self.tile_viewer.pause()
+
+    def shutdown(self):
+        self.tile_viewer.shutdown()
 
     def display_chip_dropdown(self, display=True):
         shift = 0 if display else -40
@@ -204,15 +373,20 @@ class ViewScansPanel:
 
         self.view_scan_path = path
         self.scan_name_var.set(folder_name)
+        self.selected_view = None
+        self.chip_var.set("")
+        self.magnification_roots, self.available_result_views = (
+            self._discover_result_layers()
+        )
+        self._rebuild_open_scan_menu()
 
         if self.results_menu is not None:
             self.results_menu.entryconfig("View Scan", state="normal")
             self.results_menu.entryconfig("Classify Flakes", state="normal")
 
-        messagebox.showinfo(
-            "Scan Loaded",
-            "Scan loaded successfully!"
-        )
+        # Detected flakes are the landing page even for a zero-flake scan; the
+        # latter gets a quiet empty state instead of an interrupting warning.
+        self.set_view_folder("Flakes Found")
 
     def set_view_folder(self, selected_view):
         if self.view_scan_path is None:
@@ -227,43 +401,157 @@ class ViewScansPanel:
 
         self.view_chip_index = 0
         self.view_image_index = 0
+        self.selected_view = selected_view
+        self.sparse_map_mode = selected_view != "Flakes Found"
+        self.chip_root = None
+        self.chip_source_folder = None
+        self.fit_map_button.place_forget()
 
         base_path = self.view_scan_path / "All Images"
 
         if selected_view == "Raw 2x":
-            self.view_folder = base_path / "2x" / "Raw"
+            magnification_root = self._magnification_root("2x", base_path)
+            self.chip_var.set("")
+            self.view_folder = self._named_child(magnification_root, "Raw")
             self.display_chip_dropdown(False)
+            if self.view_folder is None:
+                self.button_panel.place_forget()
+                self.fit_map_button.place(
+                    relx=0.5,
+                    y=self.pos_buttons - 40,
+                    anchor="n",
+                )
+                self._load_flattened_map("map_2x.png", "Raw 2x", False)
+                return
+
+        elif selected_view == "Filtered 2x":
+            magnification_root = self._magnification_root("2x", base_path)
+            self.chip_var.set("")
+            self.view_folder = self._named_child(magnification_root, "Filtered")
+            self.display_chip_dropdown(False)
+            self.button_panel.place_forget()
+            self.fit_map_button.place(relx=0.5, y=self.pos_buttons - 40, anchor="n")
+            if self.view_folder is not None:
+                self.load_current_folder()
+            else:
+                self._load_flattened_map("map_2x_filtered.png", "Filtered 2x Map", True)
+            return
+
+        elif selected_view == "Scan Windows":
+            self.chip_var.set("")
+            self.view_folder = self.view_scan_path / "Maps"
+            self.display_chip_dropdown(False)
+            self.button_panel.place_forget()
+            self.fit_map_button.place(relx=0.5, y=self.pos_buttons - 40, anchor="n")
+            self._load_flattened_map(
+                "map_2x_scan_windows.png",
+                "2x Scan Windows",
+                False,
+            )
+            return
 
         elif selected_view == "Raw 10x":
-            chip_folder = self.get_subfolder(base_path / "10x", self.view_chip_index)
+            magnification_root = self._magnification_root("10x", base_path)
+            chip_folder = self.get_subfolder(
+                magnification_root,
+                self.view_chip_index,
+                source_name="Raw",
+            )
             if chip_folder is None:
                 self._show_missing_folder("No 10x chip folders found.")
                 return
 
-            self.view_folder = base_path / "10x" / chip_folder.name / "Raw"
+            self.view_folder = self._named_child(chip_folder, "Raw")
+            self.chip_root = magnification_root
+            self.chip_source_folder = "Raw"
             self.display_chip_dropdown(True)
-            self.populate_chips_dropdown(base_path / "10x")
+            self.populate_chips_dropdown(magnification_root, source_name="Raw")
 
         elif selected_view == "Processed 10x":
-            chip_folder = self.get_subfolder(base_path / "10x", self.view_chip_index)
+            magnification_root = self._magnification_root("10x", base_path)
+            chip_folder = self.get_subfolder(
+                magnification_root,
+                self.view_chip_index,
+                source_name="Processed",
+            )
             if chip_folder is None:
                 self._show_missing_folder("No 10x chip folders found.")
                 return
 
-            self.view_folder = base_path / "10x" / chip_folder.name / "Processed"
+            self.view_folder = self._named_child(chip_folder, "Processed")
+            self.chip_root = magnification_root
+            self.chip_source_folder = "Processed"
             self.display_chip_dropdown(True)
-            self.populate_chips_dropdown(base_path / "10x")
+            self.populate_chips_dropdown(
+                magnification_root,
+                source_name="Processed",
+            )
 
-        elif selected_view == "Flakes Found":
-            chip_folder = self.get_subfolder(self.view_scan_path / "Flakes Found", self.view_chip_index)
+        elif selected_view == "Raw 20x":
+            magnification_root = self._magnification_root("20x", base_path)
+            chip_folder = self.get_subfolder(
+                magnification_root,
+                self.view_chip_index,
+                source_name="Raw",
+            )
             if chip_folder is None:
-                self._show_missing_folder("No detected flake folders found.")
+                self._show_missing_folder("No 20x chip folders found.")
                 return
 
-            self.view_folder = self.view_scan_path / "Flakes Found" / chip_folder.name
+            self.view_folder = self._named_child(chip_folder, "Raw")
+            self.chip_root = magnification_root
+            self.chip_source_folder = "Raw"
             self.display_chip_dropdown(True)
-            self.populate_chips_dropdown(self.view_scan_path / "Flakes Found")
+            self.populate_chips_dropdown(magnification_root, source_name="Raw")
 
+        elif selected_view == "Processed 20x":
+            magnification_root = self._magnification_root("20x", base_path)
+            chip_folder = self.get_subfolder(
+                magnification_root,
+                self.view_chip_index,
+                source_name="Processed",
+            )
+            if chip_folder is None:
+                self._show_missing_folder("No 20x chip folders found.")
+                return
+
+            self.view_folder = self._named_child(chip_folder, "Processed")
+            self.chip_root = magnification_root
+            self.chip_source_folder = "Processed"
+            self.display_chip_dropdown(True)
+            self.populate_chips_dropdown(
+                magnification_root,
+                source_name="Processed",
+            )
+
+        elif selected_view == "Flakes Found":
+            flakes_root = self.view_scan_path / "Flakes Found"
+            chip_folder = self.get_subfolder(
+                flakes_root,
+                self.view_chip_index,
+                require_images=True,
+            )
+            if chip_folder is None:
+                self.view_folder = flakes_root
+                self.image_files = []
+                self.chip_var.set("")
+                self.display_chip_dropdown(False)
+                self.button_panel.place_forget()
+                self.image_var.set("Image: No flakes found")
+                self.tile_viewer.clear("No flakes found in this scan")
+                return
+
+            self.view_folder = flakes_root / chip_folder.name
+            self.chip_root = flakes_root
+            self.display_chip_dropdown(True)
+            self.populate_chips_dropdown(flakes_root, require_images=True)
+
+        if self.sparse_map_mode:
+            self.button_panel.place_forget()
+            button_y = self.pos_buttons if self.chip_root is not None else self.pos_buttons - 40
+            self.fit_map_button.place(relx=0.5, y=button_y, anchor="n")
+        else:
+            self.fit_map_button.place_forget()
         self.load_current_folder()
 
     def load_current_folder(self):
@@ -271,10 +559,49 @@ class ViewScansPanel:
             self._show_missing_folder(f"Folder does not exist:\n{self.view_folder}")
             return
 
+        if self.sparse_map_mode:
+            title = self.selected_view
+            if self.chip_var.get():
+                title = f"{title} - {self.chip_var.get()}"
+            self.image_var.set(f"Map: {title}")
+            use_nearest = self.selected_view.startswith(("Processed", "Filtered"))
+            fallback_name = self._flattened_map_name()
+            overview_path = (
+                self.view_scan_path / "Maps" / fallback_name
+                if fallback_name is not None
+                else None
+            )
+
+            def load_flattened_fallback():
+                if fallback_name is not None:
+                    self._load_flattened_map(
+                        fallback_name,
+                        title,
+                        use_nearest,
+                    )
+                else:
+                    self.tile_viewer.clear("No positioned scan tiles were found")
+
+            if self.tile_viewer.load_tiles(
+                self.view_folder,
+                title=title,
+                nearest=use_nearest,
+                on_empty=load_flattened_fallback,
+                overview_path=overview_path,
+            ):
+                return
+            if fallback_name is not None:
+                self._load_flattened_map(
+                    fallback_name,
+                    title,
+                    use_nearest,
+                )
+            return
+
         self.image_files = sorted(
             [
                 p for p in self.view_folder.iterdir()
-                if p.suffix.lower() in [".png", ".jpg", ".jpeg", ".bmp"]
+                if p.suffix.lower() in IMAGE_SUFFIXES
             ],
             key=self.image_sort_key
         )
@@ -298,20 +625,18 @@ class ViewScansPanel:
 
         self.image_var.set(f"Image: {img_path.name}")
 
-        img = cv2.imread(str(img_path))
-        if img is None:
+        if not self.tile_viewer.load_image(img_path, title=img_path.name):
             messagebox.showwarning(
                 "Image Error",
                 f"Could not read image:\n{img_path}"
             )
             return
 
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        self.app.display_image(img)
-        self.root.update()
-
     def previous_image(self, event=None):
         if self.app.get_view() != "Scan Results":
+            return
+
+        if self.sparse_map_mode:
             return
 
         if not self.image_files:
@@ -325,6 +650,9 @@ class ViewScansPanel:
         if self.app.get_view() != "Scan Results":
             return
 
+        if self.sparse_map_mode:
+            return
+
         if not self.image_files:
             return
 
@@ -332,13 +660,25 @@ class ViewScansPanel:
         self.display_current_image()
         self.root.focus_set()
 
-    def populate_chips_dropdown(self, chip_root):
+    def populate_chips_dropdown(
+        self,
+        chip_root,
+        source_name=None,
+        require_images=False,
+    ):
         if not chip_root.exists():
             self.chip_dropdown["values"] = []
             self.chip_var.set("No chips found")
             return
 
-        chips = sorted([p.name for p in chip_root.iterdir() if p.is_dir()])
+        chips = [
+            path.name
+            for path in self._chip_folders(
+                chip_root,
+                source_name=source_name,
+                require_images=require_images,
+            )
+        ]
         self.chip_dropdown["values"] = chips
 
         if chips:
@@ -346,18 +686,75 @@ class ViewScansPanel:
         else:
             self.chip_var.set("No chips found")
 
+    def _on_chip_selected(self, _event=None):
+        if self.chip_root is None:
+            return
+        selected_chip = self.chip_var.get()
+        if not selected_chip:
+            return
+        chip_path = self.chip_root / selected_chip
+        self.view_chip_index = list(self.chip_dropdown["values"]).index(selected_chip)
+        self.view_image_index = 0
+        if self.chip_source_folder is not None:
+            self.view_folder = self._named_child(
+                chip_path,
+                self.chip_source_folder,
+            )
+        else:
+            self.view_folder = chip_path
+        self.load_current_folder()
+
+    def _flattened_map_name(self):
+        map_index = self.view_chip_index + 1
+        wafer_match = re.search(
+            r"\bwafer\s+(\d+)\b",
+            self.chip_var.get(),
+            re.IGNORECASE,
+        )
+        if wafer_match:
+            map_index = int(wafer_match.group(1))
+        names = {
+            "Raw 2x": "map_2x.png",
+            "Filtered 2x": "map_2x_filtered.png",
+            "Raw 10x": f"map_10x_wafer_{map_index}.png",
+            "Processed 10x": f"map_10x_processed_wafer_{map_index}.png",
+            "Raw 20x": f"map_20x_wafer_{map_index}.png",
+            "Processed 20x": f"map_20x_processed_wafer_{map_index}.png",
+        }
+        return names.get(self.selected_view)
+
+    def _load_flattened_map(self, filename, title, nearest=False):
+        map_path = self.view_scan_path / "Maps" / filename
+        self.image_var.set(f"Map: {title}")
+        if not map_path.is_file():
+            self.tile_viewer.clear(f"Map not found: {filename}")
+            messagebox.showwarning("Missing Map", f"Map does not exist:\n{map_path}")
+            return False
+        return self.tile_viewer.load_image(map_path, title=title, nearest=nearest)
+
     def image_sort_key(self, p):
         match = re.search(r"_(\d+)\.", p.name)
         return int(match.group(1)) if match else -1
 
-    def get_subfolder(self, path, index):
+    def get_subfolder(
+        self,
+        path,
+        index,
+        source_name=None,
+        require_images=False,
+    ):
         if not path.exists():
             return None
 
-        subfolders = sorted([p for p in path.iterdir() if p.is_dir()])
+        subfolders = self._chip_folders(
+            path,
+            source_name=source_name,
+            require_images=require_images,
+        )
         return subfolders[index] if 0 <= index < len(subfolders) else None
 
     def _show_missing_folder(self, message):
         self.image_files = []
         self.image_var.set("Image: None")
+        self.tile_viewer.clear(message)
         messagebox.showwarning("Missing Folder", message)

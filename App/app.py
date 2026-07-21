@@ -10,7 +10,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from PIL import Image, ImageTk
 
-from config import CROP_RATIO, RESOLUTION_DISPLAY
+from config import CROP_RATIO, MAP_SIZE, RESOLUTION_DISPLAY
 
 from Mapping.mapper import Mapper
 from Scanning.scan_manager import ScanManager
@@ -44,14 +44,21 @@ class App:
         self.map_canvas = Canvas(self.main_frame)
         self.map_canvas.pack(fill=BOTH, expand=True)
 
-        self.true_map = np.zeros((6000, 6000, 3), dtype=np.uint8)
-        self.filter_map = np.zeros((6000, 6000), dtype=np.uint8)
-        self.region_map = np.zeros((6000, 6000, 3), dtype=np.uint8)
+        self.true_map = np.zeros((MAP_SIZE, MAP_SIZE, 3), dtype=np.uint8)
+        self.filter_map = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.uint8)
+        # Allocated lazily only for region scans; a 10k RGB layer is about 300 MB.
+        self.region_map = None
         self.region_map_id = None
         self._region_map_lock = threading.Lock()
 
         self.img_label = Label(self.main_frame, bg="#f0f0f0")
         self.img_label.pack(fill=BOTH, expand=True)
+
+        self.scan_results_canvas = Canvas(
+            self.main_frame,
+            bg="black",
+            highlightthickness=0,
+        )
 
         self.live_mapping_var = tk.BooleanVar(value=False)
         self.map_chip_filter_var = tk.BooleanVar(value=False)
@@ -274,7 +281,7 @@ class App:
         )
         view_menu.add_command(
             label="Map View",
-            command=lambda: self.set_view("Map"),
+            command=self.show_normal_map_view,
         )
         view_menu.add_separator()
 
@@ -291,13 +298,6 @@ class App:
         self.view_scans_panel.add_to_menu(view_menu)
         view_menu.add_separator()
 
-        map_menu = Menu(view_menu, tearoff=0)
-        map_menu.add_checkbutton(
-            label="Chip Filter",
-            variable=self.map_chip_filter_var,
-            command=self.toggle_map_chip_filter,
-        )
-
         camera_menu = Menu(view_menu, tearoff=0)
         camera_menu.add_checkbutton(
             label="Chip Filter",
@@ -310,7 +310,6 @@ class App:
             command=self.toggle_camera_vignette_filter,
         )
 
-        view_menu.add_cascade(label="Map Filters", menu=map_menu)
         view_menu.add_cascade(label="Camera Filters", menu=camera_menu)
 
         menu_bar.add_cascade(label="View", menu=view_menu)
@@ -356,15 +355,6 @@ class App:
     # ------------- Display Functions -------------
 
     def display_map(self):
-        if self.region_map_available and self.region_map_view_var.get():
-            with self._region_map_lock:
-                map_data = self.region_map.copy()
-            self.map_image = Image.fromarray(map_data)
-        elif self.map_chip_filter_var.get():
-            self.map_image = Image.fromarray(self.filter_map.astype(np.uint8))
-        else:
-            self.map_image = Image.fromarray(self.true_map.astype(np.uint8))
-
         canvas_width = self.map_canvas.winfo_width()
         canvas_height = self.map_canvas.winfo_height()
 
@@ -372,7 +362,19 @@ class App:
             self.map_canvas.bind("<Configure>", lambda e: self.display_map())
             return
 
-        img_ratio = self.map_image.width / self.map_image.height
+        if (
+            self.region_map_available
+            and self.region_map_view_var.get()
+            and self.region_map is not None
+        ):
+            map_data = self.region_map
+            map_lock = self._region_map_lock
+        else:
+            map_data = self.true_map
+            map_lock = None
+
+        map_height, map_width = map_data.shape[:2]
+        img_ratio = map_width / map_height
         canvas_ratio = canvas_width / canvas_height
 
         if img_ratio > canvas_ratio:
@@ -382,8 +384,21 @@ class App:
             new_height = canvas_height
             new_width = int(canvas_height * img_ratio)
 
-        img_resized = self.map_image.resize((new_width, new_height), Image.NEAREST)
-        self.tk_map_image = ImageTk.PhotoImage(img_resized)
+        if map_lock is None:
+            map_resized = cv2.resize(
+                map_data,
+                (new_width, new_height),
+                interpolation=cv2.INTER_NEAREST,
+            )
+        else:
+            with map_lock:
+                map_resized = cv2.resize(
+                    map_data,
+                    (new_width, new_height),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+        self.map_image = Image.fromarray(map_resized.astype(np.uint8, copy=False))
+        self.tk_map_image = ImageTk.PhotoImage(self.map_image)
 
         self.map_canvas.delete("all")
 
@@ -526,6 +541,8 @@ class App:
         self.root.focus_set()
 
     def on_close(self):
+        if hasattr(self, "view_scans_panel"):
+            self.view_scans_panel.shutdown()
         self.frame_processor.close()
         self.stage.disconnect()
         self.root.destroy()
@@ -559,62 +576,72 @@ class App:
         ):
             self.scan_profile_panel.hide()
         if hasattr(self, "view_scans_panel") and mode != "Scan Results":
+            self.view_scans_panel.pause()
             self.view_scans_panel.hide()
 
         if filter_status is not None:
             if mode == "Map":
-                self.map_chip_filter_var.set(filter_status)
+                # The live 2x map always uses the normal image now.  Mapper
+                # callers still pass the legacy flag, so explicitly discard it.
+                self.map_chip_filter_var.set(False)
+                self.region_map_view_var.set(False)
             elif mode == "Camera View":
                 self.camera_chip_filter_var.set(filter_status)
 
         if mode == "Map":
             self.display_map()
+            self.scan_results_canvas.pack_forget()
             self.map_canvas.pack(fill=BOTH, expand=True) # Show map canvas
             self.img_label.pack_forget() # Hide image label
             pass
         elif mode == "Camera View":
+            self.scan_results_canvas.pack_forget()
             self.img_label.pack(fill=BOTH, expand=True)
             self.map_canvas.pack_forget() # Hide map canvas
         elif mode == "Create Search Profile" or mode == "Load Search Profile":
+            self.scan_results_canvas.pack_forget()
             self.img_label.pack(fill=BOTH, expand=True)
             self.map_canvas.pack_forget()
         elif mode == "Scan Results":
-            self.img_label.pack(fill=BOTH, expand=True)
-            self.map_canvas.pack_forget() # Hide map canvas
+            self.map_canvas.pack_forget()
+            self.img_label.pack_forget()
+            self.scan_results_canvas.pack(fill=BOTH, expand=True)
 
         self._update_region_map_toggle_visibility()
         self.root.update_idletasks()
 
     def get_live_mapping(self):
         return self.live_mapping_var.get()
+
+    def show_normal_map_view(self):
+        self.map_chip_filter_var.set(False)
+        self.region_map_view_var.set(False)
+        self.set_view("Map")
     
     def set_live_mapping(self, live_mapping_status):
         self.live_mapping_var.set(live_mapping_status)
 
     def get_filter(self):
         if self.view_mode == "Map":
-            return self.get_map_chip_filter()
+            return False
         if self.view_mode == "Camera View":
             return self.get_camera_chip_filter()
         return False
     
     def set_filter(self, status : bool):
         if self.view_mode == "Map":
-            self.map_chip_filter_var.set(status)
+            self.map_chip_filter_var.set(False)
         elif self.view_mode == "Camera View":
             self.camera_chip_filter_var.set(status)
 
     def get_map_chip_filter(self):
-        return self.map_chip_filter_var.get()
+        return False
 
     def toggle_map_chip_filter(self):
-        if self.map_chip_filter_var.get():
-            self.region_map_view_var.set(False)
+        self.map_chip_filter_var.set(False)
         self.set_view("Map")
 
     def toggle_region_map_view(self):
-        if self.region_map_view_var.get():
-            self.map_chip_filter_var.set(False)
         self.set_view("Map")
 
     def _update_region_map_toggle_visibility(self):

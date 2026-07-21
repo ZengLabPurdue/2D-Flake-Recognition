@@ -2,7 +2,6 @@
 
 import colorsys
 import json
-import re
 from pathlib import Path
 from time import perf_counter
 
@@ -483,7 +482,7 @@ def draw_class_legend(image_rgb, profile_classes, region_results=None):
             break
         class_name = profile_class["name"]
         color = tuple(int(channel) for channel in profile_class["display_color_rgb"])
-        display_name = re.sub(r"\bclass\b", "Class", class_name, flags=re.IGNORECASE)
+        display_name = class_name.upper()
         text_bounds = draw.textbbox((x, text_y), display_name, font=font)
         line_start = (
             text_bounds[2] + max(4, int(round(5 * scale))),

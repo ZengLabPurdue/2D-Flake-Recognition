@@ -102,10 +102,7 @@ def generate_10x_scan_coordinates(
         cv2.circle(true_map, (chip_center_x, chip_center_y), 8, (0, 0, 255), -1, cv2.LINE_AA)
         cv2.circle(true_map, (int(true_map.shape[1] / 2), int(true_map.shape[0] / 2)), 8, (255, 0, 0), -1, cv2.LINE_AA)
 
-        true_map_bgr = cv2.cvtColor(true_map, cv2.COLOR_RGB2BGR)
-        app.frame_processor.save_image(image=true_map_bgr)
-
-        return scan_coordinates_10x
+    return scan_coordinates_10x
     
 def generate_20x_scan_coordinates(
     app,
@@ -158,7 +155,4 @@ def generate_20x_scan_coordinates(
         cv2.circle(true_map, (chip_center_x, chip_center_y), 8, (0, 0, 255), -1, cv2.LINE_AA)
         cv2.circle(true_map, (int(true_map.shape[1] / 2), int(true_map.shape[0] / 2)), 8, (255, 0, 0), -1, cv2.LINE_AA)
 
-        true_map_bgr = cv2.cvtColor(true_map, cv2.COLOR_RGB2BGR)
-        app.frame_processor.save_image(image=true_map_bgr)
-
-        return scan_coordinates_20x
+    return scan_coordinates_20x

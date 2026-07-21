@@ -4,7 +4,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from config import PIXEL_SIZE, CROP_RATIO, RESOLUTION_DIM
+from config import PIXEL_SIZE, CROP_RATIO, MAP_SIZE, RESOLUTION_DIM
 from Scanning.coordinate_generator import generate_rect_coords
 
 class Mapper:
@@ -32,8 +32,8 @@ class Mapper:
 
         self.turret_controller.change_objective(1)
 
-        self.app.set_true_map(np.zeros((6000, 6000, 3), dtype=np.uint8))
-        self.app.set_filter_map(np.zeros((6000, 6000), dtype=np.uint8))
+        self.app.set_true_map(np.zeros((MAP_SIZE, MAP_SIZE, 3), dtype=np.uint8))
+        self.app.set_filter_map(np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.uint8))
 
         self.stage_center_x, self.stage_center_y, _ = self.stage.get_position()
 
@@ -341,8 +341,8 @@ class Mapper:
         center_x = None
         center_y = None
         captured_tiles = 0
-        map_height = 6000
-        map_width = 6000
+        map_height = MAP_SIZE
+        map_width = MAP_SIZE
         cropped_width = int(camera_width * CROP_RATIO["2X"]["x"])
         cropped_height = int(camera_height * CROP_RATIO["2X"]["y"])
         minimum_zoom = max(

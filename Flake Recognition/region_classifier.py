@@ -432,7 +432,7 @@ def draw_class_legend(image_rgb, profile_classes):
             break
         cv2.putText(
             result,
-            profile_class["name"],
+            profile_class["name"].upper(),
             (x, text_y),
             font,
             scale,

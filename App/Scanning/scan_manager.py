@@ -9,7 +9,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from config import HOME_DIR, PIXEL_SIZE, RESOLUTION_DIM, CROP_RATIO, RELATIVE_XY
+from config import HOME_DIR, PIXEL_SIZE, RESOLUTION_DIM, CROP_RATIO, RELATIVE_XY, MAP_SIZE
 from Imaging import image_metadata
 
 from . import chip_detection
@@ -259,6 +259,11 @@ class ScanManager:
             display=False,
         )
         self.app.set_filter_map(filter_map)
+        self._save_sparse_array_layer(
+            filter_map,
+            scan_path / "All Images" / "2x" / "Filtered",
+            map_id="2x-filtered-map-1",
+        )
         self._check_cancelled()
         wafers, true_map = chip_detection.find_chips(filter_map, self.app.get_true_map())
         print("Scan areas found")
@@ -278,6 +283,13 @@ class ScanManager:
             scale_2x,
             self.app.get_true_map(),
             self.camera.get_Size(),
+        )
+        scan_window_map = cv2.cvtColor(self.app.get_true_map(), cv2.COLOR_RGB2BGR)
+        self.frame_processor.save_image(
+            image=scan_window_map,
+            save_dir=scan_path / "Maps",
+            filename="map_2x_scan_windows.png",
+            vignette_applied=True,
         )
         print("Scan coordinates created")
         self._check_cancelled()
@@ -334,6 +346,39 @@ class ScanManager:
         if value is None:
             raise ValueError(f"Missing map metadata field: {key}")
         return number_type(float(value))
+
+    def _save_sparse_array_layer(self, image, output_dir, map_id, tile_size=512):
+        """Persist only non-empty chunks of a flattened map layer."""
+        output_dir = Path(output_dir)
+        map_height, map_width = image.shape[:2]
+        tile_index = 0
+        for map_y in range(0, map_height, tile_size):
+            for map_x in range(0, map_width, tile_size):
+                tile = image[
+                    map_y:min(map_height, map_y + tile_size),
+                    map_x:min(map_width, map_x + tile_size),
+                ]
+                if not np.any(tile):
+                    continue
+                tile_index += 1
+                self.frame_processor.save_image(
+                    image=tile,
+                    save_dir=output_dir,
+                    filename=f"tile_{tile_index:04d}.png",
+                    vignette_applied=False,
+                    metadata={
+                        "map_id": map_id,
+                        "map_index": 1,
+                        "map_x": map_x,
+                        "map_y": map_y,
+                        "map_center_x": map_x + tile.shape[1] / 2,
+                        "map_center_y": map_y + tile.shape[0] / 2,
+                        "map_zoom": 1,
+                        "map_width": map_width,
+                        "map_height": map_height,
+                        "map_layer": "filtered",
+                    },
+                )
 
     def _compose_map_from_tiles(self, tile_paths):
         tile_records = []
@@ -491,7 +536,7 @@ class ScanManager:
             self._check_cancelled()
             wafer_time = time.time()
 
-            self.app.set_true_map(np.zeros((6000, 6000, 3), dtype=np.uint8))
+            self.app.set_true_map(np.zeros((MAP_SIZE, MAP_SIZE, 3), dtype=np.uint8))
             region_map_id = f"10x-wafer-{i}"
             if region_mapping and hasattr(self.app, "reset_region_map"):
                 self.app.reset_region_map(
@@ -516,7 +561,11 @@ class ScanManager:
 
             camera_width, camera_height = self.camera.get_Size()
 
-            max_zoom = max(zoom, int(camera_height / (self.app.get_true_map().shape[0] / coordinates[3])), int(camera_width / (self.app.get_true_map().shape[1] / coordinates[2])))
+            max_zoom = max(
+                zoom,
+                int(np.ceil(camera_height / (self.app.get_true_map().shape[0] / coordinates[3]))),
+                int(np.ceil(camera_width / (self.app.get_true_map().shape[1] / coordinates[2]))),
+            )
 
             for j, (offset_x, offset_y) in enumerate(coords):
                 self._check_cancelled()
@@ -581,10 +630,14 @@ class ScanManager:
 
                 x_start = max(0, map_x)
                 y_start = max(0, map_y)
-                x_end = min(true_map.shape[1], x_start + img_small.shape[1])
-                y_end = min(true_map.shape[0], y_start + img_small.shape[0])
-
-                true_map[y_start:y_end, x_start:x_end] = img_small[:y_end - y_start, :x_end - x_start,]
+                source_x = max(0, -map_x)
+                source_y = max(0, -map_y)
+                width = min(img_small.shape[1] - source_x, true_map.shape[1] - x_start)
+                height = min(img_small.shape[0] - source_y, true_map.shape[0] - y_start)
+                if width > 0 and height > 0:
+                    true_map[y_start:y_start + height, x_start:x_start + width] = (
+                        img_small[source_y:source_y + height, source_x:source_x + width]
+                    )
 
                 self.app.display_map()
 
@@ -657,7 +710,7 @@ class ScanManager:
             self._check_cancelled()
             wafer_time = time.time()
 
-            self.app.set_true_map(np.zeros((6000, 6000, 3), dtype=np.uint8))
+            self.app.set_true_map(np.zeros((MAP_SIZE, MAP_SIZE, 3), dtype=np.uint8))
             region_map_id = f"20x-wafer-{i}"
             if region_mapping and hasattr(self.app, "reset_region_map"):
                 self.app.reset_region_map(
@@ -681,7 +734,11 @@ class ScanManager:
 
             camera_width, camera_height = self.camera.get_Size()
 
-            max_zoom = max(zoom, int(camera_height / (self.app.get_true_map().shape[0] / coordinates[3])), int(camera_width / (self.app.get_true_map().shape[1] / coordinates[2])))
+            max_zoom = max(
+                zoom,
+                int(np.ceil(camera_height / (self.app.get_true_map().shape[0] / coordinates[3]))),
+                int(np.ceil(camera_width / (self.app.get_true_map().shape[1] / coordinates[2]))),
+            )
 
             for j, (offset_x, offset_y) in enumerate(coords):
                 self._check_cancelled()
@@ -746,10 +803,14 @@ class ScanManager:
 
                 x_start = max(0, map_x)
                 y_start = max(0, map_y)
-                x_end = min(true_map.shape[1], x_start + img_small.shape[1])
-                y_end = min(true_map.shape[0], y_start + img_small.shape[0])
-
-                true_map[y_start:y_end, x_start:x_end] = img_small[:y_end - y_start, :x_end - x_start,]
+                source_x = max(0, -map_x)
+                source_y = max(0, -map_y)
+                width = min(img_small.shape[1] - source_x, true_map.shape[1] - x_start)
+                height = min(img_small.shape[0] - source_y, true_map.shape[0] - y_start)
+                if width > 0 and height > 0:
+                    true_map[y_start:y_start + height, x_start:x_start + width] = (
+                        img_small[source_y:source_y + height, source_x:source_x + width]
+                    )
 
                 self.app.display_map()
 
