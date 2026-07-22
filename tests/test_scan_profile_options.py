@@ -508,6 +508,21 @@ class ScanProfileOptionsTests(unittest.TestCase):
             "Preview class",
         )
 
+        without_legend, _, without_legend_details = find_flakes(
+            image,
+            area_threshold=10,
+            return_details=True,
+            profile_configuration=profile.matching_configuration(),
+            color_seed=0,
+            draw_legend=False,
+        )
+        self.assertIsNone(without_legend_details["legend_position"])
+        self.assertTrue(np.array_equal(
+            without_legend,
+            without_legend_details["classified_image_without_legend"],
+        ))
+        self.assertFalse(np.array_equal(classified, without_legend))
+
     def test_class_legend_supports_each_image_corner(self):
         image = np.zeros((200, 240, 3), dtype=np.uint8)
         classes = [{

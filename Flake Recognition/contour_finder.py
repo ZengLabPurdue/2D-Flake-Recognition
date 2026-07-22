@@ -17,8 +17,11 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from contextlib import redirect_stdout
+import io
 from pathlib import Path
 import sys
+from time import perf_counter
 
 import cv2
 import matplotlib.pyplot as plt
@@ -37,6 +40,15 @@ from Scanning import region_classifier as _app_region_classifier  # noqa: E402
 APP_CONTOUR_IMPLEMENTATION_PATH = Path(_app_contour_finder.__file__).resolve()
 APP_CLASSIFIER_IMPLEMENTATION_PATH = Path(_app_region_classifier.__file__).resolve()
 IDENTIFIED_POINT_COLOR = "#ff00ff"
+SUPPORTED_IMAGE_SUFFIXES = {
+    ".bmp",
+    ".jpeg",
+    ".jpg",
+    ".png",
+    ".tif",
+    ".tiff",
+    ".webp",
+}
 
 # Preserve the former import surface for other experiments in this directory.
 # Every production function now resolves to the App implementation.
@@ -415,38 +427,249 @@ def _argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv=None) -> int:
-    arguments = _argument_parser().parse_args(argv)
-    image_path = arguments.image or _choose_image_path()
-    if image_path is None:
-        print("No image selected.")
-        return 1
-    profile_path = arguments.profile
+# Previous single-image ``main`` is intentionally disabled while the directory
+# benchmark is active. ``benchmark_and_plot`` remains available for interactive
+# single-image experiments.
+#
+# def main(argv=None) -> int:
+#     arguments = _argument_parser().parse_args(argv)
+#     image_path = arguments.image or _choose_image_path()
+#     ...
+#     benchmark_and_plot(image_bgr, profile_path, ...)
+#     return 0
+
+
+def _choose_directory_path() -> Path | None:
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        selected = filedialog.askdirectory(
+            title="Choose an Image Directory to Benchmark"
+        )
+    finally:
+        root.destroy()
+    return Path(selected) if selected else None
+
+
+def _directory_argument_parser() -> argparse.ArgumentParser:
+    default_profile = Path(AN_TEST_PROFILE_PATH)
+    parser = argparse.ArgumentParser(
+        description=(
+            "Benchmark the production contour classifier over every supported "
+            "image in a directory without plotting or saving output images."
+        )
+    )
+    parser.add_argument(
+        "directory",
+        nargs="?",
+        type=Path,
+        help="Directory to benchmark. A directory picker opens when omitted.",
+    )
+    parser.add_argument(
+        "--profile",
+        type=Path,
+        default=default_profile if default_profile.is_file() else None,
+        help="Profile JSON or profile directory (default: App/Profiles/An_Test).",
+    )
+    parser.add_argument(
+        "--recursive",
+        action="store_true",
+        help="Include images in nested directories.",
+    )
+    parser.add_argument("--edge-threshold", type=float, default=10)
+    parser.add_argument(
+        "--area-threshold",
+        type=float,
+        default=DEFAULT_AREA_THRESHOLD,
+    )
+    parser.add_argument(
+        "--contrast-threshold",
+        type=float,
+        default=DEFAULT_CONTRAST_MATCH_THRESHOLD,
+    )
+    parser.add_argument(
+        "--flood-threshold",
+        type=float,
+        default=DEFAULT_REGION_FLOOD_FILL_THRESHOLD,
+    )
+    parser.add_argument(
+        "--pixel-size",
+        type=float,
+        default=None,
+        help="Micrometers per pixel, required by profiles with size limits.",
+    )
+    return parser
+
+
+def _discover_images(directory: Path, recursive: bool) -> list[Path]:
+    candidates = directory.rglob("*") if recursive else directory.iterdir()
+    return sorted(
+        (
+            path
+            for path in candidates
+            if path.is_file() and path.suffix.casefold() in SUPPORTED_IMAGE_SUFFIXES
+        ),
+        key=lambda path: str(path.relative_to(directory)).casefold(),
+    )
+
+
+def _merge_benchmark(aggregate, benchmark) -> None:
+    for name, measurement in benchmark["functions"].items():
+        destination = aggregate.setdefault(
+            name,
+            {"calls": 0, "total_seconds": 0.0, "max_seconds": 0.0},
+        )
+        destination["calls"] += measurement["calls"]
+        destination["total_seconds"] += measurement["total_seconds"]
+        destination["max_seconds"] = max(
+            destination["max_seconds"],
+            measurement["max_seconds"],
+        )
+
+
+def _print_aggregate_benchmark(aggregate, pipeline_seconds) -> None:
+    print("\nDirectory benchmark (inclusive timings across successful images)")
+    print(
+        f"{'Function':<30} {'Calls':>9} {'Total ms':>12} "
+        f"{'Average ms':>12} {'Max ms':>12}"
+    )
+    print("-" * 79)
+    for name, measurement in sorted(
+        aggregate.items(),
+        key=lambda item: item[1]["total_seconds"],
+        reverse=True,
+    ):
+        calls = measurement["calls"]
+        print(
+            f"{name:<30} {calls:>9,d} "
+            f"{measurement['total_seconds'] * 1000:>12.3f} "
+            f"{measurement['total_seconds'] / calls * 1000:>12.3f} "
+            f"{measurement['max_seconds'] * 1000:>12.3f}"
+        )
+    print("-" * 79)
+    print(f"{'Combined pipeline time':<40} {pipeline_seconds * 1000:>12.3f}")
+
+
+def benchmark_directory(
+    directory,
+    profile_path=None,
+    *,
+    recursive=False,
+    edge_threshold=10,
+    area_threshold=DEFAULT_AREA_THRESHOLD,
+    contrast_threshold=DEFAULT_CONTRAST_MATCH_THRESHOLD,
+    region_flood_fill_threshold=DEFAULT_REGION_FLOOD_FILL_THRESHOLD,
+    pixel_size_um=None,
+) -> int:
+    """Benchmark all images in a directory without displaying or saving them."""
+    directory = Path(directory).resolve()
+    if not directory.is_dir():
+        raise NotADirectoryError(f"Image directory was not found: {directory}")
+    profile_path = Path(profile_path).resolve() if profile_path is not None else None
     if profile_path is not None and not profile_path.exists():
         raise FileNotFoundError(f"Profile was not found: {profile_path}")
 
-    print(f"Contour implementation : {APP_CONTOUR_IMPLEMENTATION_PATH}")
-    print(f"Classifier implementation: {APP_CLASSIFIER_IMPLEMENTATION_PATH}")
-    print(f"Image                  : {image_path.resolve()}")
-    print(f"Profile                : {profile_path.resolve() if profile_path else 'none'}")
-    image_bgr = read_image_bgr(image_path)
-    print(f"Image dimensions       : {image_bgr.shape[1]} x {image_bgr.shape[0]}")
+    image_paths = _discover_images(directory, recursive)
+    if not image_paths:
+        print(f"No supported images found in: {directory}")
+        return 1
 
-    benchmark_and_plot(
-        image_bgr,
-        profile_path,
+    print(f"Contour implementation  : {APP_CONTOUR_IMPLEMENTATION_PATH}")
+    print(f"Classifier implementation: {APP_CLASSIFIER_IMPLEMENTATION_PATH}")
+    print(f"Image directory         : {directory}")
+    print(f"Profile                 : {profile_path if profile_path else 'none'}")
+    print(f"Images discovered       : {len(image_paths):,}")
+
+    aggregate = {}
+    combined_pipeline_seconds = 0.0
+    successful = 0
+    failed = 0
+    total_regions = 0
+    total_identified = 0
+    total_filtered = 0
+    batch_started_at = perf_counter()
+
+    for index, image_path in enumerate(image_paths, start=1):
+        relative_path = image_path.relative_to(directory)
+        prefix = f"[{index:>{len(str(len(image_paths)))}}/{len(image_paths)}]"
+        print(f"{prefix} Processing {relative_path} ...", flush=True)
+        try:
+            image_bgr = read_image_bgr(image_path)
+            # find_flakes prints an individual benchmark table. Suppress it so
+            # directory mode can emit one status line and one aggregate table.
+            with redirect_stdout(io.StringIO()):
+                _, _, details = _app_contour_finder.find_flakes(
+                    image_bgr,
+                    edge_threshold=edge_threshold,
+                    area_threshold=area_threshold,
+                    return_details=True,
+                    profile_path=profile_path,
+                    contrast_threshold=contrast_threshold,
+                    region_flood_fill_threshold=region_flood_fill_threshold,
+                    color_seed=0,
+                    draw_legend=False,
+                    benchmark=True,
+                    pixel_size_um=pixel_size_um,
+                )
+            benchmark = details["benchmark"]
+            regions = details["region_results"]
+            identified = sum(
+                region["matched_class"] is not None for region in regions
+            )
+            filtered = sum(region.get("filtered", False) for region in regions)
+            pipeline_seconds = benchmark["wall_time_seconds"]
+            _merge_benchmark(aggregate, benchmark)
+            combined_pipeline_seconds += pipeline_seconds
+            successful += 1
+            total_regions += len(regions)
+            total_identified += identified
+            total_filtered += filtered
+            print(
+                f"{prefix} Completed {relative_path} | "
+                f"{pipeline_seconds:.3f} s | {len(regions):,} regions | "
+                f"{identified:,} identified | {filtered:,} filtered",
+                flush=True,
+            )
+        except Exception as exc:  # Continue benchmarking the remaining images.
+            failed += 1
+            print(
+                f"{prefix} FAILED {relative_path} | "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+
+    batch_seconds = perf_counter() - batch_started_at
+    if aggregate:
+        _print_aggregate_benchmark(aggregate, combined_pipeline_seconds)
+    print("\nDirectory summary")
+    print(f"Successful images : {successful:,}")
+    print(f"Failed images     : {failed:,}")
+    print(f"Total regions     : {total_regions:,}")
+    print(f"Identified regions: {total_identified:,}")
+    print(f"Filtered regions  : {total_filtered:,}")
+    print(f"Batch elapsed time: {batch_seconds:.3f} s")
+    return 0 if successful and not failed else 1
+
+
+def main(argv=None) -> int:
+    arguments = _directory_argument_parser().parse_args(argv)
+    directory = arguments.directory or _choose_directory_path()
+    if directory is None:
+        print("No directory selected.")
+        return 1
+    return benchmark_directory(
+        directory,
+        arguments.profile,
+        recursive=arguments.recursive,
         edge_threshold=arguments.edge_threshold,
         area_threshold=arguments.area_threshold,
         contrast_threshold=arguments.contrast_threshold,
         region_flood_fill_threshold=arguments.flood_threshold,
         pixel_size_um=arguments.pixel_size,
-        legend_position=arguments.legend_position,
-        display=not arguments.no_show,
-        save_plot=arguments.save_plot,
-        annotate_references=not arguments.no_reference_labels,
-        print_points=arguments.print_points,
     )
-    return 0
 
 
 __all__ = _APP_EXPORTS + [
@@ -457,6 +680,7 @@ __all__ = _APP_EXPORTS + [
     "print_region_summary",
     "print_region_points",
     "benchmark_and_plot",
+    "benchmark_directory",
     "main",
 ]
 

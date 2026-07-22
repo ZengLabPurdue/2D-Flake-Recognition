@@ -54,6 +54,7 @@ class ScanSetupPanel:
         )
         self.detection_model_var = tk.StringVar(value="Region Detection")
         self.profile_name_var = tk.StringVar(value="Profile: loading default...")
+        self.class_legend_var = tk.BooleanVar(value=True)
 
         self.frame = self._build_panel()
         self._show_controls_for_scan_type()
@@ -248,6 +249,11 @@ class ScanSetupPanel:
             style="Normal.TButton",
             command=self._choose_and_load_profile,
         )
+        self.class_legend_checkbox = ttk.Checkbutton(
+            self.full_scan_controls,
+            text="Show legend in flake results",
+            variable=self.class_legend_var,
+        )
 
     def show(self):
         self.app.set_view("Camera View")
@@ -286,15 +292,17 @@ class ScanSetupPanel:
         full_scan_selected = self.scan_type_var.get() in self.DETECTION_SCAN_TYPES
         self.profile_label.place_forget()
         self.load_profile_button.place_forget()
+        self.class_legend_checkbox.place_forget()
 
         if region_selected and full_scan_selected:
             self.profile_label.place(relx=0.5, y=221, anchor="n", width=184)
             self.load_profile_button.place(relx=0.5, y=255, anchor="n")
+            self.class_legend_checkbox.place(relx=0.5, y=295, anchor="n")
             self.run_button.state(["!disabled"])
-            self.full_scan_controls.configure(height=280)
-            self.frame.configure(height=442)
-            self.background.configure(height=440)
-            self.run_button.place(relx=0.5, y=399, anchor="n")
+            self.full_scan_controls.configure(height=330)
+            self.frame.configure(height=480)
+            self.background.configure(height=478)
+            self.run_button.place(relx=0.5, y=435, anchor="n")
         else:
             self.run_button.state(["!disabled"])
             if full_scan_selected:
@@ -342,6 +350,7 @@ class ScanSetupPanel:
             options.update({
                 "detection_model": self.detection_model_var.get(),
                 "scan_profile": profile,
+                "display_class_legend": self.class_legend_var.get(),
             })
             if scan_type in self.FULL_SCAN_TYPES:
                 options.update({

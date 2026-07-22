@@ -30,6 +30,7 @@ class Flake_Detector:
         profile_path=None,
         scan_path=None,
         progress_callback=None,
+        draw_class_legend=True,
     ):
         if detection_model not in ("Flake Detection", "Region Detection"):
             raise ValueError(f"Unknown detection model: {detection_model}")
@@ -64,18 +65,21 @@ class Flake_Detector:
                     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
                     if detection_model == "Region Detection":
-                        scanned_img, detections, save = (
+                        scanned_img, detections, save, processed_img = (
                             self.flake_identifier.identify_flakes_region_model(
                                 img,
                                 profile_path,
                                 color_seed=color_seed,
+                                return_segmented_map=True,
                                 pixel_size_um=image_data.get("pixel_size_um"),
+                                draw_legend=draw_class_legend,
                             )
                         )
                     else:
                         scanned_img, detections, save = (
                             self.flake_identifier.identify_flakes_flake_model(img)
                         )
+                        processed_img = scanned_img
 
                     for detection in detections:
                         record = self._create_detection_record(
@@ -89,8 +93,11 @@ class Flake_Detector:
                             detection_records.append(record)
 
                     out_path = img_path.parent.parent / "Processed" / img_path.name
+                    # Processed tiles are stitched into a map, so keep them
+                    # free of per-tile legends. Flakes Found images are viewed
+                    # individually and retain the optional legend below.
                     frame_processor.save_image(
-                        cv2.cvtColor(scanned_img, cv2.COLOR_RGB2BGR),
+                        cv2.cvtColor(processed_img, cv2.COLOR_RGB2BGR),
                         save_dir=out_path.parent,
                         filename=out_path.name,
                         vignette_applied=vignette_applied,

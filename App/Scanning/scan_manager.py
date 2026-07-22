@@ -154,6 +154,7 @@ class ScanManager:
         full_scan_magnification="10x",
         detection_model="Region Detection",
         scan_profile=None,
+        display_class_legend=True,
     ):
         if self.scan_running:
             raise RuntimeError("A scan is already running.")
@@ -186,6 +187,7 @@ class ScanManager:
             "detection_model": detection_model,
             "scan_profile_name": getattr(scan_profile, "name", None),
             "scan_profile_path": str(profile_path) if profile_path else None,
+            "display_class_legend": bool(display_class_legend),
         }
         self.update_scan_status(processing_state="Waiting")
 
@@ -213,6 +215,7 @@ class ScanManager:
                     scan_magnification=full_scan_magnification,
                     detection_model=detection_model,
                     profile_path=profile_path,
+                    display_class_legend=display_class_legend,
                 )
             elif scan_type == "2x Scan":
                 self.run_2x_scan(
@@ -243,6 +246,7 @@ class ScanManager:
                 self.run_100x_scan(
                     detection_model=detection_model,
                     profile_path=profile_path,
+                    display_class_legend=display_class_legend,
                 )
             elif scan_type == "Vignette Filter":
                 self.create_vignette_filter(
@@ -348,6 +352,7 @@ class ScanManager:
         scan_magnification="10x",
         detection_model="Region Detection",
         profile_path=None,
+        display_class_legend=True,
     ):
         self.app.set_live_mapping(False)
         self.app.open_panel("Scan Info Panel")
@@ -451,6 +456,7 @@ class ScanManager:
                     profile_path=profile_path,
                     scan_path=scan_path,
                     progress_callback=report_processing,
+                    draw_class_legend=display_class_legend,
                 )
             except Exception as error:
                 self._processing_error = error
@@ -1068,6 +1074,7 @@ class ScanManager:
         detection_model="Region Detection",
         profile_path=None,
         group_threshold_um=None,
+        display_class_legend=True,
     ):
         """Find regions at 10x, navigate at 20x, and capture each one at 100x."""
         if detection_model not in ("Flake Detection", "Region Detection"):
@@ -1118,24 +1125,27 @@ class ScanManager:
         color_seed = None
         if detection_model == "Region Detection":
             color_seed = secrets.randbits(32)
-            annotated_rgb, detections, _ = (
+            annotated_rgb, detections, _, processed_rgb = (
                 detector.flake_identifier.identify_flakes_region_model(
                     image_rgb,
                     profile_path,
                     color_seed=color_seed,
+                    return_segmented_map=True,
                     pixel_size_um=pixel_size,
+                    draw_legend=display_class_legend,
                 )
             )
         else:
             annotated_rgb, all_detections, _ = (
                 detector.flake_identifier.identify_flakes_flake_model(image_rgb)
             )
+            processed_rgb = annotated_rgb
             detections = [
                 detection for detection in all_detections if int(detection[0]) == 1
             ]
 
         self.frame_processor.save_image(
-            image=cv2.cvtColor(annotated_rgb, cv2.COLOR_RGB2BGR),
+            image=cv2.cvtColor(processed_rgb, cv2.COLOR_RGB2BGR),
             save_dir=processed_dir,
             filename="source_10x.png",
             vignette_applied=True,
