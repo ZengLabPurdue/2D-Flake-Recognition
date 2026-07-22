@@ -28,6 +28,12 @@ DEFAULT_CONTRAST_MATCH_THRESHOLD = region_classifier.DEFAULT_CONTRAST_MATCH_THRE
 DEFAULT_REGION_FLOOD_FILL_THRESHOLD = (
     region_classifier.DEFAULT_REGION_FLOOD_FILL_THRESHOLD
 )
+LEGEND_TOP_LEFT = region_classifier.LEGEND_TOP_LEFT
+LEGEND_TOP_RIGHT = region_classifier.LEGEND_TOP_RIGHT
+LEGEND_BOTTOM_LEFT = region_classifier.LEGEND_BOTTOM_LEFT
+LEGEND_BOTTOM_RIGHT = region_classifier.LEGEND_BOTTOM_RIGHT
+LEGEND_POSITIONS = region_classifier.LEGEND_POSITIONS
+DEFAULT_LEGEND_POSITION = region_classifier.DEFAULT_LEGEND_POSITION
 
 
 @dataclass(slots=True)
@@ -370,12 +376,16 @@ def find_flakes(
     draw_legend=True,
     benchmark=False,
     legacy_mask=False,
+    pixel_size_um=None,
+    profile_configuration=None,
+    legend_position=DEFAULT_LEGEND_POSITION,
 ):
     """Detect flakes and return either class labels or the legacy masked image.
 
     The default result is the RGB class map used by Flake Recognition. Set
     ``legacy_mask=True`` for the production scanner's BGR image with flakes set
-    to black. Both modes return the same filtered external contour list.
+    to black. ``legend_position`` accepts top_left, top_right, bottom_left, or
+    bottom_right. Both modes return the same filtered external contour list.
     """
     _validate_image(image_bgr)
     if edge_threshold < 0 or area_threshold < 0:
@@ -437,17 +447,29 @@ def find_flakes(
         return result_image, detection["external_contours"]
 
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-    profile_classes = (
-        _timed_call(
-            stats,
-            "load_profile_classes",
-            region_classifier.load_profile_classes,
-            profile_path,
-            contrast_threshold,
+    if profile_path is not None and profile_configuration is not None:
+        raise ValueError("Provide either a profile path or profile configuration, not both.")
+    if profile_configuration is None:
+        profile_configuration = (
+            _timed_call(
+                stats,
+                "load_profile_configuration",
+                region_classifier.load_profile_configuration,
+                profile_path,
+                contrast_threshold,
+            )
+            if profile_path
+            else {
+                "classes": [],
+                "filters": [],
+                "minimum_size_um": None,
+                "maximum_size_um": None,
+            }
         )
-        if profile_path
-        else []
-    )
+    if not isinstance(profile_configuration, dict):
+        raise ValueError("Profile configuration must be an object.")
+    profile_classes = profile_configuration["classes"]
+    profile_filters = profile_configuration.get("filters", [])
     class_colors = _timed_call(
         stats,
         "generate_class_colors",
@@ -472,6 +494,10 @@ def find_flakes(
         profile_classes,
         region_flood_fill_threshold,
         stats,
+        pixel_size_um,
+        profile_configuration["minimum_size_um"],
+        profile_configuration["maximum_size_um"],
+        profile_filters,
     )
     classified_without_legend = _timed_call(
         stats,
@@ -490,6 +516,7 @@ def find_flakes(
             classified_without_legend,
             profile_classes,
             classification["region_results"],
+            legend_position,
         )
         if draw_legend
         else classified_without_legend
@@ -525,12 +552,19 @@ def find_flakes(
             "all_region_mask": classification["all_region_mask"],
             "region_overlap_count_map": classification["region_overlap_count_map"],
             "matched_region_mask": classification["matched_region_mask"],
+            "rejected_region_mask": classification["rejected_region_mask"],
+            "filtered_region_mask": classification["filtered_region_mask"],
             "class_index_map": classification["class_index_map"],
             "class_masks": classification["class_masks"],
             "class_overlap_count_map": classification["class_overlap_count_map"],
             "class_stack_order": [item["name"] for item in profile_classes],
+            "filter_order": [item["name"] for item in profile_filters],
+            "legend_position": legend_position if draw_legend else None,
             "background_color_rgb": classification["background_color_rgb"],
             "region_flood_fill_threshold": region_flood_fill_threshold,
+            "pixel_size_um": pixel_size_um,
+            "profile_minimum_size_um": profile_configuration["minimum_size_um"],
+            "profile_maximum_size_um": profile_configuration["maximum_size_um"],
             "region_results": classification["region_results"],
             "class_colors_rgb": class_colors,
             "class_pixel_counts": {
@@ -581,6 +615,8 @@ def floodfill_internal_contours(
     color_seed=None,
     draw_legend=True,
     benchmark=False,
+    pixel_size_um=None,
+    legend_position=DEFAULT_LEGEND_POSITION,
 ):
     """Return the classified image and a mask of all matched regions."""
     classified_image, _, details = find_flakes(
@@ -594,7 +630,9 @@ def floodfill_internal_contours(
         region_flood_fill_threshold=region_flood_fill_threshold,
         color_seed=color_seed,
         draw_legend=draw_legend,
+        legend_position=legend_position,
         benchmark=benchmark,
+        pixel_size_um=pixel_size_um,
     )
     segmented_mask = details["matched_region_mask"]
     filled_regions, _ = cv2.findContours(

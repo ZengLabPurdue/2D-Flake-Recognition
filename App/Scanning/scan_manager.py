@@ -1114,6 +1114,7 @@ class ScanManager:
 
         detector = flake_detection.Flake_Detector()
         image_rgb = cv2.cvtColor(source_image, cv2.COLOR_BGR2RGB)
+        pixel_size = float(PIXEL_SIZE["10X"][self.resolution])
         color_seed = None
         if detection_model == "Region Detection":
             color_seed = secrets.randbits(32)
@@ -1122,6 +1123,7 @@ class ScanManager:
                     image_rgb,
                     profile_path,
                     color_seed=color_seed,
+                    pixel_size_um=pixel_size,
                 )
             )
         else:
@@ -1140,14 +1142,15 @@ class ScanManager:
         )
 
         image_height, image_width = image_rgb.shape[:2]
-        pixel_size = float(PIXEL_SIZE["10X"][self.resolution])
         regions = []
         for detection in detections:
             if detection_model == "Region Detection":
                 classification = detection.get("matched_class")
+                classification_group = detection.get("matched_group")
                 bounding_box = detection.get("bounding_box")
             else:
                 classification = flake_detection.FLAKE_CLASSIFICATIONS[1]
+                classification_group = None
                 bounding_box = detection[1]
             bounded_box = detector._bounded_box(bounding_box, image_rgb.shape)
             if classification is None or bounded_box is None:
@@ -1157,6 +1160,7 @@ class ScanManager:
             center_y = y + height / 2
             regions.append({
                 "classification": classification,
+                "classification_group": classification_group,
                 "bounding_box_px": {
                     "x": round(x, 3),
                     "y": round(y, 3),

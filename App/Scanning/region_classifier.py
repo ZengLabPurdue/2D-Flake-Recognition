@@ -14,6 +14,25 @@ DEFAULT_CONTRAST_MATCH_THRESHOLD = 3
 DEFAULT_REGION_FLOOD_FILL_THRESHOLD = 10
 CLASS_COLOR_SATURATION = 0.58
 CLASS_COLOR_LIGHTNESS = 0.72
+FILTER_BAD_COLOR = "bad_color"
+FILTER_INTENSITY_RANGE = "intensity_range"
+FILTER_COLOR_DISTANCE = "color_distance"
+FILTER_TYPES = {
+    FILTER_BAD_COLOR,
+    FILTER_INTENSITY_RANGE,
+    FILTER_COLOR_DISTANCE,
+}
+LEGEND_TOP_LEFT = "top_left"
+LEGEND_TOP_RIGHT = "top_right"
+LEGEND_BOTTOM_LEFT = "bottom_left"
+LEGEND_BOTTOM_RIGHT = "bottom_right"
+LEGEND_POSITIONS = {
+    LEGEND_TOP_LEFT,
+    LEGEND_TOP_RIGHT,
+    LEGEND_BOTTOM_LEFT,
+    LEGEND_BOTTOM_RIGHT,
+}
+DEFAULT_LEGEND_POSITION = LEGEND_TOP_LEFT
 
 
 def _timed_call(stats, name, function, *args):
@@ -38,7 +57,7 @@ def _read_rgb_triplet(value, field_name, class_name):
     if isinstance(value, dict):
         value = (value.get("red"), value.get("green"), value.get("blue"))
     if (
-        not isinstance(value, (list, tuple))
+        not isinstance(value, (list, tuple, np.ndarray))
         or len(value) != 3
         or any(
             isinstance(channel, bool)
@@ -51,8 +70,30 @@ def _read_rgb_triplet(value, field_name, class_name):
     return np.asarray(value, dtype=np.float64)
 
 
-def load_profile_classes(profile_path, contrast_threshold=None):
-    """Load the class names, signed RGB contrasts, and matching tolerances."""
+def _read_size_requirement(value, label):
+    if value is None:
+        return None, None
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} size requirement must be an object or null.")
+    result = []
+    for key in ("minimum_size_um", "maximum_size_um"):
+        size = value.get(key)
+        if size is not None and (
+            isinstance(size, bool)
+            or not isinstance(size, (int, float))
+            or not np.isfinite(size)
+            or size <= 0
+        ):
+            raise ValueError(f"{label} has an invalid {key} value.")
+        result.append(None if size is None else float(size))
+    minimum, maximum = result
+    if minimum is not None and maximum is not None and minimum > maximum:
+        raise ValueError(f"{label} minimum size cannot exceed its maximum size.")
+    return minimum, maximum
+
+
+def load_profile_configuration(profile_path, contrast_threshold=None):
+    """Load matching classes and profile-wide region requirements."""
     profile_path = Path(profile_path)
     if profile_path.is_dir():
         profile_path = profile_path / "profile.json"
@@ -71,12 +112,22 @@ def load_profile_classes(profile_path, contrast_threshold=None):
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"Could not read profile: {profile_path}") from exc
 
+    if not isinstance(profile_data, dict):
+        raise ValueError(f"Profile has invalid data: {profile_path}")
     saved_classes = profile_data.get("classes")
+    saved_filters = profile_data.get("filters", [])
     if not isinstance(saved_classes, list):
         raise ValueError(f"Profile has an invalid class list: {profile_path}")
+    if not isinstance(saved_filters, list):
+        raise ValueError(f"Profile has an invalid filter list: {profile_path}")
+    profile_version = profile_data.get("version", 1)
 
+    profile_minimum, profile_maximum = _read_size_requirement(
+        profile_data.get("size_requirement"),
+        "Profile",
+    )
     profile_classes = []
-    for class_index, saved_class in enumerate(saved_classes):
+    for saved_class in saved_classes:
         if not isinstance(saved_class, dict):
             raise ValueError(f"Profile class has invalid data: {profile_path}")
         name = saved_class.get("name")
@@ -109,25 +160,156 @@ def load_profile_classes(profile_path, contrast_threshold=None):
             raise ValueError(f"Profile class {name!r} has an invalid RGB contrast.")
         if not np.isfinite(tolerance) or not 0 <= tolerance <= 255:
             raise ValueError(f"Profile class {name!r} has an invalid tolerance.")
-        profile_classes.append({
-            "name": name,
-            "contrast_rgb": contrast_rgb,
-            "tolerance": tolerance,
-            "class_index": class_index,
-        })
+        identify = saved_class.get("identify", True)
+        reject = profile_version == 3 and saved_class.get("reject", False)
+        if not isinstance(identify, bool) or not isinstance(reject, bool):
+            raise ValueError(f"Profile class {name!r} has invalid matching flags.")
+        group = saved_class.get("group")
+        if group is None:
+            group = ""
+        if not isinstance(group, str):
+            raise ValueError(f"Profile class {name!r} has an invalid group.")
+        minimum, maximum = _read_size_requirement(
+            saved_class.get("size_requirement"),
+            f"Profile class {name!r}",
+        )
+        if not reject or identify:
+            profile_classes.append({
+                "name": name,
+                "contrast_rgb": contrast_rgb,
+                "tolerance": tolerance,
+                # Keep display-map indexes contiguous when a version-three
+                # reject-only class is migrated into a filter.
+                "class_index": len(profile_classes),
+                "group": group.strip(),
+                "identify": identify,
+                "minimum_size_um": minimum,
+                "maximum_size_um": maximum,
+            })
+        if reject:
+            saved_filters.append({
+                "name": f"Filter {sum(item.get('_legacy_filter', False) for item in saved_filters) + 1}",
+                "type": FILTER_BAD_COLOR,
+                "contrast_rgb": contrast_rgb,
+                "tolerance": tolerance,
+                "_legacy_filter": True,
+            })
 
-    if not profile_classes:
-        raise ValueError(f"Profile contains no color classes: {profile_path}")
     names = [item["name"].casefold() for item in profile_classes]
     if len(names) != len(set(names)):
         raise ValueError("Profile class names must be unique.")
-    return profile_classes
+    profile_filters = []
+    for filter_index, saved_filter in enumerate(saved_filters, start=1):
+        if not isinstance(saved_filter, dict):
+            raise ValueError(f"Profile filter {filter_index} has invalid data.")
+        name = saved_filter.get("name")
+        filter_type = saved_filter.get("type")
+        if not isinstance(name, str) or not name.strip() or filter_type not in FILTER_TYPES:
+            raise ValueError(f"Profile filter {filter_index} is invalid.")
+        item = {"name": name.strip(), "type": filter_type}
+        if filter_type == FILTER_INTENSITY_RANGE:
+            intensity_range = saved_filter.get("intensity_range")
+            if not isinstance(intensity_range, dict):
+                raise ValueError(f"Profile filter {name!r} has an invalid intensity range.")
+            minimum = intensity_range.get("minimum")
+            maximum = intensity_range.get("maximum")
+            if any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not np.isfinite(value)
+                or not 0 <= value <= 255
+                for value in (minimum, maximum)
+            ) or minimum > maximum:
+                raise ValueError(f"Profile filter {name!r} has an invalid intensity range.")
+            item["minimum_intensity"] = float(minimum)
+            item["maximum_intensity"] = float(maximum)
+        else:
+            try:
+                item["contrast_rgb"] = _read_rgb_triplet(
+                    saved_filter["contrast_rgb"],
+                    "RGB contrast",
+                    name,
+                )
+            except KeyError as exc:
+                raise ValueError(
+                    f"Profile filter {name!r} is missing RGB contrast data."
+                ) from exc
+            if np.any(item["contrast_rgb"] < -255) or np.any(
+                item["contrast_rgb"] > 255
+            ):
+                raise ValueError(
+                    f"Profile filter {name!r} has an invalid RGB contrast."
+                )
+            if filter_type == FILTER_BAD_COLOR:
+                tolerance = saved_filter.get("tolerance")
+                if tolerance is None:
+                    try:
+                        tolerance = saved_filter["flood_fill"]["threshold"]
+                    except (KeyError, TypeError) as exc:
+                        raise ValueError(
+                            f"Profile filter {name!r} has no color tolerance."
+                        ) from exc
+                if (
+                    isinstance(tolerance, bool)
+                    or not isinstance(tolerance, (int, float))
+                    or not np.isfinite(tolerance)
+                    or not 0 <= tolerance <= 255
+                ):
+                    raise ValueError(f"Profile filter {name!r} has an invalid tolerance.")
+                item["tolerance"] = float(tolerance)
+            else:
+                distance = saved_filter.get("distance_threshold")
+                if (
+                    isinstance(distance, bool)
+                    or not isinstance(distance, (int, float))
+                    or not np.isfinite(distance)
+                    or distance < 0
+                ):
+                    raise ValueError(
+                        f"Profile filter {name!r} has an invalid color distance."
+                    )
+                item["distance_threshold"] = float(distance)
+        profile_filters.append(item)
+
+    filter_names = [item["name"].casefold() for item in profile_filters]
+    if len(filter_names) != len(set(filter_names)):
+        raise ValueError("Profile filter names must be unique.")
+
+    return {
+        "classes": profile_classes,
+        "filters": profile_filters,
+        "minimum_size_um": profile_minimum,
+        "maximum_size_um": profile_maximum,
+    }
 
 
-def match_profile_class(contrast_rgb, profile_classes):
-    """Return the nearest class whose RGB difference is inside its tolerance."""
+def load_profile_classes(profile_path, contrast_threshold=None):
+    """Load class matching data while retaining the former public API."""
+    return load_profile_configuration(profile_path, contrast_threshold)["classes"]
+
+
+def _size_matches(size_um, minimum, maximum):
+    if size_um is None:
+        return True
+    if minimum is not None and size_um < minimum:
+        return False
+    if maximum is not None and size_um > maximum:
+        return False
+    return True
+
+
+def match_profile_class(contrast_rgb, profile_classes, size_um=None):
+    """Return the nearest enabled class inside its color and size limits."""
     matches = []
     for profile_class in profile_classes:
+        if not profile_class.get("identify", True):
+            continue
+        if not _size_matches(
+            size_um,
+            profile_class.get("minimum_size_um"),
+            profile_class.get("maximum_size_um"),
+        ):
+            continue
         difference = np.abs(contrast_rgb - profile_class["contrast_rgb"])
         if np.all(difference <= profile_class["tolerance"]):
             matches.append((
@@ -136,6 +318,29 @@ def match_profile_class(contrast_rgb, profile_classes):
                 difference,
             ))
     return min(matches, key=lambda match: match[0]) if matches else None
+
+
+def match_profile_filter(contrast_rgb, average_intensity, profile_filters):
+    """Return the first automatic rejection filter matched by a region."""
+    for profile_filter in profile_filters:
+        filter_type = profile_filter["type"]
+        if filter_type == FILTER_INTENSITY_RANGE:
+            if (
+                profile_filter["minimum_intensity"]
+                <= average_intensity
+                <= profile_filter["maximum_intensity"]
+            ):
+                return average_intensity, profile_filter, None
+            continue
+
+        difference = np.abs(contrast_rgb - profile_filter["contrast_rgb"])
+        distance = float(np.linalg.norm(difference))
+        if filter_type == FILTER_BAD_COLOR:
+            if np.all(difference <= profile_filter["tolerance"]):
+                return distance, profile_filter, difference
+        elif distance > profile_filter["distance_threshold"]:
+            return distance, profile_filter, difference
+    return None
 
 
 def generate_class_colors(profile_classes, color_seed=None):
@@ -212,6 +417,381 @@ def _flood_fill_region(gray_image, seed_point, allowed_mask, threshold):
     return flood_mask[1:-1, 1:-1] == 255
 
 
+def _validate_classification_size_inputs(
+    profile_classes,
+    pixel_size_um,
+    minimum_size_um,
+    maximum_size_um,
+):
+    if pixel_size_um is not None and (
+        isinstance(pixel_size_um, bool)
+        or not isinstance(pixel_size_um, (int, float))
+        or not np.isfinite(pixel_size_um)
+        or pixel_size_um <= 0
+    ):
+        raise ValueError("Pixel size must be a positive number of micrometers.")
+    class_size_required = any(
+        item.get("minimum_size_um") is not None
+        or item.get("maximum_size_um") is not None
+        for item in profile_classes
+    )
+    if (
+        minimum_size_um is not None
+        or maximum_size_um is not None
+        or class_size_required
+    ) and pixel_size_um is None:
+        raise ValueError("A calibrated pixel size is required by the profile size limits.")
+
+
+def _prepare_classification_workspace(
+    image_rgb,
+    edge_mask,
+    contours,
+    all_external_contours,
+    external_indices,
+):
+    height, width = edge_mask.shape
+    external_contours = [contours[index] for index in external_indices]
+    external_mask = contour_mask(image_rgb.shape, external_contours)
+    all_external_mask = contour_mask(image_rgb.shape, all_external_contours)
+    background_pixels = image_rgb[all_external_mask == 0]
+    if len(background_pixels) == 0:
+        raise ValueError("The detected contours cover the entire image background.")
+    background_color = np.rint(np.mean(background_pixels, axis=0))
+    rejected_region_mask = np.zeros((height, width), dtype=np.uint8)
+    return {
+        "height": height,
+        "width": width,
+        "external_mask": external_mask,
+        "all_external_mask": all_external_mask,
+        "background_color": background_color,
+        "all_region_mask": np.zeros((height, width), dtype=np.uint8),
+        "region_overlap_count_map": np.zeros((height, width), dtype=np.uint16),
+        "all_internal_mask": np.zeros((height, width), dtype=np.uint8),
+        "matched_region_mask": np.zeros((height, width), dtype=np.uint8),
+        "matched_internal_mask": np.zeros((height, width), dtype=np.uint8),
+        "rejected_region_mask": rejected_region_mask,
+        "filtered_region_mask": rejected_region_mask,
+        "class_masks": {},
+        "region_results": [],
+    }
+
+
+def _connected_components(allowed):
+    return cv2.connectedComponentsWithStats(allowed, connectivity=8)
+
+
+def _describe_seed_components(
+    component_count,
+    labels,
+    component_stats,
+    centroids,
+    x1,
+    y1,
+    contour_indices,
+    contours,
+    depths,
+    benchmark_stats,
+):
+    components = []
+    for component_label in range(1, component_count):
+        component_mask = labels == component_label
+        component_size = int(component_stats[component_label, cv2.CC_STAT_AREA])
+        if component_size == 0:
+            continue
+        seed_x, seed_y = (
+            int(round(value)) for value in centroids[component_label]
+        )
+        if (
+            not 0 <= seed_x < component_mask.shape[1]
+            or not 0 <= seed_y < component_mask.shape[0]
+            or not component_mask[seed_y, seed_x]
+        ):
+            seed_y, seed_x = np.argwhere(component_mask)[0]
+            seed_x, seed_y = int(seed_x), int(seed_y)
+        global_seed = (seed_x + x1, seed_y + y1)
+        source_index = _timed_call(
+            benchmark_stats,
+            "deepest_contour_at_point",
+            _deepest_contour_at_point,
+            global_seed,
+            contour_indices,
+            contours,
+            depths,
+        )
+        components.append({
+            "pixel_count": component_size,
+            "global_seed": global_seed,
+            "source_contour_index": source_index,
+            "raw_depth": int(depths[source_index]),
+        })
+    return components
+
+
+def _extract_external_components(
+    external_index,
+    contours,
+    edge_mask,
+    contour_indices_by_external,
+    depths,
+    width,
+    height,
+    benchmark_stats,
+):
+    external_contour = contours[external_index]
+    x, y, contour_width, contour_height = cv2.boundingRect(external_contour)
+    x1, y1 = max(0, x - 1), max(0, y - 1)
+    x2 = min(width, x + contour_width + 1)
+    y2 = min(height, y + contour_height + 1)
+
+    local_contour = external_contour.copy()
+    local_contour[:, 0, 0] -= x1
+    local_contour[:, 0, 1] -= y1
+    local_external_mask = np.zeros((y2 - y1, x2 - x1), dtype=np.uint8)
+    cv2.drawContours(local_external_mask, [local_contour], -1, 255, cv2.FILLED)
+    allowed = (
+        (local_external_mask > 0)
+        & (edge_mask[y1:y2, x1:x2] == 0)
+    ).astype(np.uint8)
+    component_count, labels, component_stats, centroids = _timed_call(
+        benchmark_stats,
+        "connected_components",
+        _connected_components,
+        allowed,
+    )
+    components = _timed_call(
+        benchmark_stats,
+        "describe_seed_components",
+        _describe_seed_components,
+        component_count,
+        labels,
+        component_stats,
+        centroids,
+        x1,
+        y1,
+        contour_indices_by_external[external_index],
+        contours,
+        depths,
+        benchmark_stats,
+    )
+    if not components:
+        return None
+    outer_depth = min(component["raw_depth"] for component in components)
+    components.sort(
+        key=lambda component: (
+            component["raw_depth"],
+            component["pixel_count"],
+        ),
+        reverse=True,
+    )
+    return {
+        "x1": x1,
+        "y1": y1,
+        "x2": x2,
+        "y2": y2,
+        "local_external_mask": local_external_mask,
+        "components": components,
+        "outer_depth": outer_depth,
+    }
+
+
+def _prepare_flood_inputs(gray_image, external_region, local_seed):
+    return (
+        np.ascontiguousarray(gray_image[
+            external_region["y1"]:external_region["y2"],
+            external_region["x1"]:external_region["x2"],
+        ]),
+        external_region["local_external_mask"] > 0,
+        local_seed,
+    )
+
+
+def _measure_region_geometry(
+    region_mask,
+    x1,
+    y1,
+    pixel_size_um,
+    minimum_size_um,
+    maximum_size_um,
+):
+    pixel_count = int(np.count_nonzero(region_mask))
+    if pixel_count == 0:
+        return None
+    region_y, region_x = np.nonzero(region_mask)
+    bounding_box = {
+        "x": int(x1 + region_x.min()),
+        "y": int(y1 + region_y.min()),
+        "width": int(region_x.max() - region_x.min() + 1),
+        "height": int(region_y.max() - region_y.min() + 1),
+    }
+    size_um = (
+        max(bounding_box["width"], bounding_box["height"]) * pixel_size_um
+        if pixel_size_um is not None
+        else None
+    )
+    return {
+        "pixel_count": pixel_count,
+        "bounding_box": bounding_box,
+        "size_um": size_um,
+        "inside_profile_size": _size_matches(
+            size_um,
+            minimum_size_um,
+            maximum_size_um,
+        ),
+    }
+
+
+def _measure_region_color(image_rgb, region_mask, x1, y1, x2, y2, background_color):
+    region_pixels = image_rgb[y1:y2, x1:x2][region_mask]
+    average_color = np.mean(region_pixels, axis=0)
+    return {
+        "average_color": average_color,
+        "contrast": np.rint(average_color - background_color),
+        "average_intensity": float(np.mean(average_color)),
+    }
+
+
+def _match_region(
+    color_measurement,
+    geometry,
+    profile_classes,
+    profile_filters,
+    benchmark_stats,
+):
+    filter_match = (
+        _timed_call(
+            benchmark_stats,
+            "match_profile_filter",
+            match_profile_filter,
+            color_measurement["contrast"],
+            color_measurement["average_intensity"],
+            profile_filters or (),
+        )
+        if geometry["inside_profile_size"] and profile_filters
+        else None
+    )
+    match = (
+        _timed_call(
+            benchmark_stats,
+            "match_profile_class",
+            match_profile_class,
+            color_measurement["contrast"],
+            profile_classes,
+            geometry["size_um"],
+        )
+        if (
+            profile_classes
+            and geometry["inside_profile_size"]
+            and filter_match is None
+        )
+        else None
+    )
+    return filter_match, match
+
+
+def _update_region_masks(
+    workspace,
+    region_mask,
+    x1,
+    y1,
+    x2,
+    y2,
+    region_type,
+    matched_filter,
+    matched_class,
+):
+    workspace["all_region_mask"][y1:y2, x1:x2][region_mask] = 255
+    workspace["region_overlap_count_map"][y1:y2, x1:x2][region_mask] += 1
+    if region_type == "internal":
+        workspace["all_internal_mask"][y1:y2, x1:x2][region_mask] = 255
+    if matched_filter:
+        workspace["filtered_region_mask"][y1:y2, x1:x2][region_mask] = 255
+    if not matched_class:
+        return
+    workspace["matched_region_mask"][y1:y2, x1:x2][region_mask] = 255
+    if region_type == "internal":
+        workspace["matched_internal_mask"][y1:y2, x1:x2][region_mask] = 255
+    class_mask = workspace["class_masks"].get(matched_class["name"])
+    if class_mask is None:
+        class_mask = np.zeros(
+            (workspace["height"], workspace["width"]),
+            dtype=np.uint8,
+        )
+        workspace["class_masks"][matched_class["name"]] = class_mask
+    class_mask[y1:y2, x1:x2][region_mask] = 255
+
+
+def _make_region_result(
+    component,
+    region_type,
+    nesting_depth,
+    color_measurement,
+    geometry,
+    matched_filter,
+    matched_class,
+    filter_match,
+    match,
+):
+    average_color = color_measurement["average_color"]
+    contrast = color_measurement["contrast"]
+    size_um = geometry["size_um"]
+    return {
+        "seed_point": component["global_seed"],
+        "region_type": region_type,
+        "source_contour_index": int(component["source_contour_index"]),
+        "nesting_depth": nesting_depth,
+        "seed_component_pixel_count": component["pixel_count"],
+        "average_color_rgb": tuple(
+            int(round(channel)) for channel in average_color
+        ),
+        "average_intensity": color_measurement["average_intensity"],
+        "contrast_rgb": tuple(int(round(channel)) for channel in contrast),
+        "matched_class": matched_class["name"] if matched_class else None,
+        "matched_group": (
+            (matched_class.get("group") or None) if matched_class else None
+        ),
+        "filtered": matched_filter is not None,
+        "filtered_by": matched_filter["name"] if matched_filter else None,
+        "filter_type": matched_filter["type"] if matched_filter else None,
+        "rejected": matched_filter is not None,
+        "rejected_by_class": None,
+        "rejected_by_group": None,
+        "size_um": float(size_um) if size_um is not None else None,
+        "inside_profile_size": geometry["inside_profile_size"],
+        "matched_color_rgb": (
+            matched_class["display_color_rgb"] if matched_class else None
+        ),
+        "match_threshold": matched_class["tolerance"] if matched_class else None,
+        "match_distance": (
+            match[0] if match else (filter_match[0] if filter_match else None)
+        ),
+        "channel_difference_rgb": (
+            tuple(float(value) for value in match[2])
+            if match and match[2] is not None
+            else (
+                tuple(float(value) for value in filter_match[2])
+                if filter_match and filter_match[2] is not None
+                else None
+            )
+        ),
+        "pixel_count": geometry["pixel_count"],
+        "bounding_box": geometry["bounding_box"],
+    }
+
+
+def _build_class_index_maps(height, width, profile_classes, class_masks):
+    class_index_map = np.zeros((height, width), dtype=np.int32)
+    class_overlap_count_map = np.zeros((height, width), dtype=np.uint16)
+    for profile_class in profile_classes:
+        class_mask = class_masks.get(profile_class["name"])
+        if class_mask is None:
+            continue
+        selected = class_mask > 0
+        class_overlap_count_map[selected] += 1
+        class_index_map[selected] = profile_class["class_index"] + 1
+    return class_index_map, class_overlap_count_map
+
+
 def classify_contour_regions(
     image_rgb,
     edge_mask,
@@ -223,200 +803,183 @@ def classify_contour_regions(
     profile_classes,
     flood_fill_threshold,
     benchmark_stats=None,
+    pixel_size_um=None,
+    minimum_size_um=None,
+    maximum_size_um=None,
+    profile_filters=None,
 ):
     """Flood every contour seed independently and retain overlapping classes."""
-    height, width = edge_mask.shape
-    external_contours = [contours[index] for index in external_indices]
-    external_mask = contour_mask(image_rgb.shape, external_contours)
-    all_external_mask = contour_mask(image_rgb.shape, all_external_contours)
-    background_pixels = image_rgb[all_external_mask == 0]
-    if len(background_pixels) == 0:
-        raise ValueError("The detected contours cover the entire image background.")
-    background_color = np.rint(np.mean(background_pixels, axis=0))
-
-    all_region_mask = np.zeros((height, width), dtype=np.uint8)
-    region_overlap_count_map = np.zeros((height, width), dtype=np.uint16)
-    all_internal_mask = np.zeros((height, width), dtype=np.uint8)
-    matched_region_mask = np.zeros((height, width), dtype=np.uint8)
-    matched_internal_mask = np.zeros((height, width), dtype=np.uint8)
-    class_masks = {}
-    region_results = []
+    _timed_call(
+        benchmark_stats,
+        "validate_classification_inputs",
+        _validate_classification_size_inputs,
+        profile_classes,
+        pixel_size_um,
+        minimum_size_um,
+        maximum_size_um,
+    )
+    workspace = _timed_call(
+        benchmark_stats,
+        "prepare_classification_workspace",
+        _prepare_classification_workspace,
+        image_rgb,
+        edge_mask,
+        contours,
+        all_external_contours,
+        external_indices,
+    )
     depths = _timed_call(
         benchmark_stats,
         "contour_depths",
         _contour_depths,
         hierarchy,
     )
-    gray_image = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
+    gray_image = _timed_call(
+        benchmark_stats,
+        "convert_to_grayscale",
+        cv2.cvtColor,
+        image_rgb,
+        cv2.COLOR_RGB2GRAY,
+    )
 
     for external_index in external_indices:
-        external_contour = contours[external_index]
-        x, y, contour_width, contour_height = cv2.boundingRect(external_contour)
-        x1, y1 = max(0, x - 1), max(0, y - 1)
-        x2 = min(width, x + contour_width + 1)
-        y2 = min(height, y + contour_height + 1)
-
-        local_contour = external_contour.copy()
-        local_contour[:, 0, 0] -= x1
-        local_contour[:, 0, 1] -= y1
-        local_external_mask = np.zeros((y2 - y1, x2 - x1), dtype=np.uint8)
-        cv2.drawContours(local_external_mask, [local_contour], -1, 255, cv2.FILLED)
-        allowed = (
-            (local_external_mask > 0)
-            & (edge_mask[y1:y2, x1:x2] == 0)
-        ).astype(np.uint8)
-        component_count, labels, stats, centroids = cv2.connectedComponentsWithStats(
-            allowed,
-            connectivity=8,
+        external_region = _timed_call(
+            benchmark_stats,
+            "extract_external_components",
+            _extract_external_components,
+            external_index,
+            contours,
+            edge_mask,
+            contour_indices_by_external,
+            depths,
+            workspace["width"],
+            workspace["height"],
+            benchmark_stats,
         )
-
-        components = []
-        contour_indices = contour_indices_by_external[external_index]
-        for component_label in range(1, component_count):
-            component_mask = labels == component_label
-            component_size = int(stats[component_label, cv2.CC_STAT_AREA])
-            if component_size == 0:
-                continue
-            seed_x, seed_y = (int(round(value)) for value in centroids[component_label])
-            if (
-                not 0 <= seed_x < component_mask.shape[1]
-                or not 0 <= seed_y < component_mask.shape[0]
-                or not component_mask[seed_y, seed_x]
-            ):
-                seed_y, seed_x = np.argwhere(component_mask)[0]
-                seed_x, seed_y = int(seed_x), int(seed_y)
-            global_seed = (seed_x + x1, seed_y + y1)
-            source_index = _timed_call(
-                benchmark_stats,
-                "deepest_contour_at_point",
-                _deepest_contour_at_point,
-                global_seed,
-                contour_indices,
-                contours,
-                depths,
-            )
-            components.append({
-                "pixel_count": component_size,
-                "global_seed": global_seed,
-                "source_contour_index": source_index,
-                "raw_depth": int(depths[source_index]),
-            })
-
-        if not components:
+        if external_region is None:
             continue
-        outer_depth = min(component["raw_depth"] for component in components)
-        components.sort(
-            key=lambda component: (
-                component["raw_depth"],
-                component["pixel_count"],
-            ),
-            reverse=True,
-        )
-
-        for component in components:
+        x1 = external_region["x1"]
+        y1 = external_region["y1"]
+        x2 = external_region["x2"]
+        y2 = external_region["y2"]
+        for component in external_region["components"]:
             global_seed = component["global_seed"]
             local_seed = (global_seed[0] - x1, global_seed[1] - y1)
+            gray_region, allowed_mask, local_seed = _timed_call(
+                benchmark_stats,
+                "prepare_flood_inputs",
+                _prepare_flood_inputs,
+                gray_image,
+                external_region,
+                local_seed,
+            )
             region_mask = _timed_call(
                 benchmark_stats,
                 "flood_fill_region",
                 _flood_fill_region,
-                np.ascontiguousarray(gray_image[y1:y2, x1:x2]),
+                gray_region,
                 local_seed,
-                local_external_mask > 0,
+                allowed_mask,
                 flood_fill_threshold,
             )
-            pixel_count = int(np.count_nonzero(region_mask))
-            if pixel_count == 0:
+            geometry = _timed_call(
+                benchmark_stats,
+                "measure_region_geometry",
+                _measure_region_geometry,
+                region_mask,
+                x1,
+                y1,
+                pixel_size_um,
+                minimum_size_um,
+                maximum_size_um,
+            )
+            if geometry is None:
                 continue
-
-            region_y, region_x = np.nonzero(region_mask)
-            bounding_box = {
-                "x": int(x1 + region_x.min()),
-                "y": int(y1 + region_y.min()),
-                "width": int(region_x.max() - region_x.min() + 1),
-                "height": int(region_y.max() - region_y.min() + 1),
-            }
-
-            depth_difference = component["raw_depth"] - outer_depth
+            depth_difference = (
+                component["raw_depth"] - external_region["outer_depth"]
+            )
             nesting_depth = max(0, (depth_difference + 1) // 2)
             region_type = "external" if nesting_depth == 0 else "internal"
-            region_pixels = image_rgb[y1:y2, x1:x2][region_mask]
-            average_color = np.mean(region_pixels, axis=0)
-            contrast = np.rint(average_color - background_color)
-            match = (
-                _timed_call(
-                    benchmark_stats,
-                    "match_profile_class",
-                    match_profile_class,
-                    contrast,
-                    profile_classes,
-                )
-                if profile_classes
-                else None
+            color_measurement = _timed_call(
+                benchmark_stats,
+                "measure_region_color",
+                _measure_region_color,
+                image_rgb,
+                region_mask,
+                x1,
+                y1,
+                x2,
+                y2,
+                workspace["background_color"],
             )
-
-            all_region_mask[y1:y2, x1:x2][region_mask] = 255
-            region_overlap_count_map[y1:y2, x1:x2][region_mask] += 1
-            if region_type == "internal":
-                all_internal_mask[y1:y2, x1:x2][region_mask] = 255
-
+            filter_match, match = _timed_call(
+                benchmark_stats,
+                "match_region",
+                _match_region,
+                color_measurement,
+                geometry,
+                profile_classes,
+                profile_filters,
+                benchmark_stats,
+            )
+            matched_filter = filter_match[1] if filter_match else None
             matched_class = match[1] if match else None
-            if matched_class:
-                matched_region_mask[y1:y2, x1:x2][region_mask] = 255
-                if region_type == "internal":
-                    matched_internal_mask[y1:y2, x1:x2][region_mask] = 255
-                class_mask = class_masks.get(matched_class["name"])
-                if class_mask is None:
-                    class_mask = np.zeros((height, width), dtype=np.uint8)
-                    class_masks[matched_class["name"]] = class_mask
-                class_mask[y1:y2, x1:x2][region_mask] = 255
+            _timed_call(
+                benchmark_stats,
+                "update_region_masks",
+                _update_region_masks,
+                workspace,
+                region_mask,
+                x1,
+                y1,
+                x2,
+                y2,
+                region_type,
+                matched_filter,
+                matched_class,
+            )
+            workspace["region_results"].append(_timed_call(
+                benchmark_stats,
+                "build_region_result",
+                _make_region_result,
+                component,
+                region_type,
+                nesting_depth,
+                color_measurement,
+                geometry,
+                matched_filter,
+                matched_class,
+                filter_match,
+                match,
+            ))
 
-            region_results.append({
-                "seed_point": global_seed,
-                "region_type": region_type,
-                "source_contour_index": int(component["source_contour_index"]),
-                "nesting_depth": nesting_depth,
-                "seed_component_pixel_count": component["pixel_count"],
-                "average_color_rgb": tuple(
-                    int(round(channel)) for channel in average_color
-                ),
-                "contrast_rgb": tuple(int(round(channel)) for channel in contrast),
-                "matched_class": matched_class["name"] if matched_class else None,
-                "matched_color_rgb": (
-                    matched_class["display_color_rgb"] if matched_class else None
-                ),
-                "match_threshold": matched_class["tolerance"] if matched_class else None,
-                "match_distance": match[0] if match else None,
-                "channel_difference_rgb": (
-                    tuple(float(value) for value in match[2]) if match else None
-                ),
-                "pixel_count": pixel_count,
-                "bounding_box": bounding_box,
-            })
-
-    class_index_map = np.zeros((height, width), dtype=np.int32)
-    class_overlap_count_map = np.zeros((height, width), dtype=np.uint16)
-    for profile_class in profile_classes:
-        class_mask = class_masks.get(profile_class["name"])
-        if class_mask is None:
-            continue
-        selected = class_mask > 0
-        class_overlap_count_map[selected] += 1
-        class_index_map[selected] = profile_class["class_index"] + 1
+    class_index_map, class_overlap_count_map = _timed_call(
+        benchmark_stats,
+        "build_class_index_maps",
+        _build_class_index_maps,
+        workspace["height"],
+        workspace["width"],
+        profile_classes,
+        workspace["class_masks"],
+    )
 
     return {
-        "external_mask": external_mask,
-        "all_external_mask": all_external_mask,
-        "all_region_mask": all_region_mask,
-        "region_overlap_count_map": region_overlap_count_map,
-        "all_internal_mask": all_internal_mask,
-        "matched_region_mask": matched_region_mask,
-        "matched_internal_mask": matched_internal_mask,
+        "external_mask": workspace["external_mask"],
+        "all_external_mask": workspace["all_external_mask"],
+        "all_region_mask": workspace["all_region_mask"],
+        "region_overlap_count_map": workspace["region_overlap_count_map"],
+        "all_internal_mask": workspace["all_internal_mask"],
+        "matched_region_mask": workspace["matched_region_mask"],
+        "matched_internal_mask": workspace["matched_internal_mask"],
+        "rejected_region_mask": workspace["rejected_region_mask"],
+        "filtered_region_mask": workspace["filtered_region_mask"],
         "class_index_map": class_index_map,
-        "class_masks": class_masks,
+        "class_masks": workspace["class_masks"],
         "class_overlap_count_map": class_overlap_count_map,
-        "background_color_rgb": tuple(int(channel) for channel in background_color),
-        "region_results": region_results,
+        "background_color_rgb": tuple(
+            int(channel) for channel in workspace["background_color"]
+        ),
+        "region_results": workspace["region_results"],
     }
 
 
@@ -425,6 +988,8 @@ def create_classified_image(image_shape, external_mask, class_index_map, profile
     image = np.zeros(image_shape, dtype=np.uint8)
     image[external_mask > 0] = (255, 255, 255)
     for profile_class in profile_classes:
+        if not profile_class.get("identify", True):
+            continue
         image[class_index_map == profile_class["class_index"] + 1] = profile_class[
             "display_color_rgb"
         ]
@@ -448,9 +1013,22 @@ def _load_class_legend_font(font_size):
     return ImageFont.load_default(size=font_size)
 
 
-def draw_class_legend(image_rgb, profile_classes, region_results=None):
-    """Draw a compact monospace legend linked to each matching region."""
-    if not profile_classes:
+def draw_class_legend(
+    image_rgb,
+    profile_classes,
+    region_results=None,
+    position=DEFAULT_LEGEND_POSITION,
+):
+    """Draw a compact linked legend in any corner of the classified image."""
+    if not isinstance(position, str) or position not in LEGEND_POSITIONS:
+        choices = ", ".join(sorted(LEGEND_POSITIONS))
+        raise ValueError(f"Legend position must be one of: {choices}.")
+    display_classes = [
+        item
+        for item in profile_classes
+        if item.get("identify", True)
+    ]
+    if not display_classes:
         return image_rgb.copy()
 
     result = Image.fromarray(image_rgb.copy())
@@ -460,8 +1038,25 @@ def draw_class_legend(image_rgb, profile_classes, region_results=None):
     font = _load_class_legend_font(font_size)
     line_height = max(16, int(round(font_size * 1.15)))
     line_width = max(1, int(round(scale / 2)))
-    x = max(10, int(round(14 * scale)))
-    y = max(8, int(round(12 * scale)))
+    horizontal_margin = max(10, int(round(14 * scale)))
+    vertical_margin = max(8, int(round(12 * scale)))
+    line_gap = max(4, int(round(5 * scale)))
+    on_right = position in (LEGEND_TOP_RIGHT, LEGEND_BOTTOM_RIGHT)
+    on_bottom = position in (LEGEND_BOTTOM_LEFT, LEGEND_BOTTOM_RIGHT)
+
+    maximum_lines = max(
+        0,
+        (image_rgb.shape[0] - 2 * vertical_margin) // line_height,
+    )
+    display_classes = display_classes[:maximum_lines]
+    if not display_classes:
+        return image_rgb.copy()
+    block_height = len(display_classes) * line_height
+    start_y = (
+        image_rgb.shape[0] - vertical_margin - block_height
+        if on_bottom
+        else vertical_margin
+    )
 
     regions_by_class = {}
     for region in region_results or ():
@@ -476,19 +1071,30 @@ def draw_class_legend(image_rgb, profile_classes, region_results=None):
         regions_by_class.setdefault(class_name, []).append(center)
 
     label_layout = []
-    for index, profile_class in enumerate(profile_classes):
-        text_y = y + index * line_height
-        if text_y + font_size >= image_rgb.shape[0] - 5:
-            break
+    for index, profile_class in enumerate(display_classes):
+        text_y = start_y + index * line_height
         class_name = profile_class["name"]
         color = tuple(int(channel) for channel in profile_class["display_color_rgb"])
-        display_name = class_name.upper()
-        text_bounds = draw.textbbox((x, text_y), display_name, font=font)
+        display_name = (
+            f"{profile_class['group']} / {class_name}"
+            if profile_class.get("group")
+            else class_name
+        ).upper()
+        unpositioned_bounds = draw.textbbox((0, 0), display_name, font=font)
+        text_width = unpositioned_bounds[2] - unpositioned_bounds[0]
+        text_x = (
+            max(horizontal_margin, image_rgb.shape[1] - horizontal_margin - text_width)
+            if on_right
+            else horizontal_margin
+        )
+        text_bounds = draw.textbbox((text_x, text_y), display_name, font=font)
         line_start = (
-            text_bounds[2] + max(4, int(round(5 * scale))),
+            text_bounds[0] - line_gap if on_right else text_bounds[2] + line_gap,
             (text_bounds[1] + text_bounds[3]) // 2,
         )
-        label_layout.append((class_name, display_name, color, text_y, line_start))
+        label_layout.append(
+            (class_name, display_name, color, (text_x, text_y), line_start)
+        )
 
     for class_name, _, color, _, line_start in label_layout:
         for region_center in regions_by_class.get(class_name, ()):
@@ -498,8 +1104,8 @@ def draw_class_legend(image_rgb, profile_classes, region_results=None):
                 width=line_width,
             )
 
-    for _, display_name, color, text_y, _ in label_layout:
-        draw.text((x, text_y), display_name, font=font, fill=color)
+    for _, display_name, color, text_position, _ in label_layout:
+        draw.text(text_position, display_name, font=font, fill=color)
 
     return np.asarray(result).copy()
 

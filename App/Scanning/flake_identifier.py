@@ -278,6 +278,8 @@ class Flake_Identifier():
         output=False,
         color_seed=None,
         return_segmented_map=False,
+        pixel_size_um=None,
+        legend_position=contour_finder.DEFAULT_LEGEND_POSITION,
     ):
         if profile_path is None:
             raise ValueError("A scan profile is required for region detection.")
@@ -288,6 +290,8 @@ class Flake_Identifier():
             return_details=True,
             profile_path=profile_path,
             color_seed=color_seed,
+            pixel_size_um=pixel_size_um,
+            legend_position=legend_position,
         )
         matched_regions = [
             region

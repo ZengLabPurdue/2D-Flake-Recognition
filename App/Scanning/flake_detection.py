@@ -69,6 +69,7 @@ class Flake_Detector:
                                 img,
                                 profile_path,
                                 color_seed=color_seed,
+                                pixel_size_um=image_data.get("pixel_size_um"),
                             )
                         )
                     else:
@@ -165,6 +166,7 @@ class Flake_Detector:
     ):
         if detection_model == "Region Detection":
             classification = detection.get("matched_class")
+            classification_group = detection.get("matched_group")
             bounding_box = detection.get("bounding_box")
             class_id = None
         else:
@@ -174,6 +176,7 @@ class Flake_Detector:
                 class_id,
                 f"Class {class_id}",
             )
+            classification_group = None
 
         bounded_box = self._bounded_box(bounding_box, image_shape)
         if classification is None or bounded_box is None:
@@ -190,6 +193,7 @@ class Flake_Detector:
 
         record = {
             "classification": classification,
+            "classification_group": classification_group,
             "source_image": source_image,
             "magnification": image_data.get("magnification"),
             "bounding_box_px": {
