@@ -24,7 +24,7 @@ class CapturePanel:
             self.parent,
             bg="#f0f0f0",
             width=204,
-            height=215
+            height=211
         )
         frame.place(relx=1.0, rely=0.0, anchor="ne")
 
@@ -32,7 +32,7 @@ class CapturePanel:
             frame,
             bg="white",
             width=200,
-            height=213
+            height=209
         )
         background.place(x=2, y=0)
 

@@ -28,14 +28,14 @@ class ObjectiveControlPanel:
             self.parent,
             bg="#f0f0f0",
             width=204,
-            height=240
+            height=235
         )
 
         background = tk.Frame(
             panel,
             bg="white",
             width=200,
-            height=238
+            height=233
         )
         background.place(x=2, y=0)
 

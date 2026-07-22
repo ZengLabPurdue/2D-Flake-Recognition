@@ -31,7 +31,7 @@ class FocusPanel:
             self.parent,
             bg="#f0f0f0",
             width=204,
-            height=235
+            height=233
         )
         panel.place(relx=1.0, rely=0.0, anchor="ne")
 
@@ -39,7 +39,7 @@ class FocusPanel:
             panel,
             bg="white",
             width=200,
-            height=233
+            height=231
         )
         background.place(x=2, y=0)
 

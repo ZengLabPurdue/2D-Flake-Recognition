@@ -15,6 +15,8 @@ class ScanStatusPanel:
         self._scan_started_at = None
         self._final_total_elapsed = None
         self._total_timer_job = None
+        self._progress_text = "Not Started"
+        self._processing_text = None
         self.frame = self._build_panel()
 
     def _build_panel(self):
@@ -22,17 +24,17 @@ class ScanStatusPanel:
             self.parent,
             bg="#f0f0f0",
             width=204,
-            height=222
+            height=225
         )
         panel.place(relx=1.0, rely=0.0, anchor="ne")
 
-        background = Frame(
+        self.background = Frame(
             panel,
             bg="white",
             width=200,
-            height=220
+            height=223
         )
-        background.place(x=2, y=0)
+        self.background.place(x=2, y=0)
 
         title_label = Label(
             panel,
@@ -61,9 +63,11 @@ class ScanStatusPanel:
 
         self.progress_label = Label(
             panel,
-            text="Progress: Not Started",
+            text="(Imaging) Not Started",
             bg="white",
-            fg="black"
+            fg="black",
+            justify="center",
+            wraplength=188,
         )
         self.progress_label.place(relx=0.5, y=75, anchor="n")
 
@@ -83,16 +87,6 @@ class ScanStatusPanel:
         )
         self.total_time_label.place(relx=0.5, y=115, anchor="n")
 
-        self.processing_label = Label(
-            panel,
-            text="Processing: Not Started",
-            bg="white",
-            fg="black",
-            justify="center",
-            wraplength=188,
-        )
-        self.processing_label.place(relx=0.5, y=135, anchor="n")
-
         style = ttk.Style()
         style.configure(
             "Normal.TButton",
@@ -107,10 +101,44 @@ class ScanStatusPanel:
             command=self._request_stop,
             style="Normal.TButton",
         )
-        self.stop_button.place(relx=0.5, y=182, anchor="n")
+        self.stop_button.place(relx=0.5, y=142, anchor="n")
         self.stop_button.state(["disabled"])
 
+        panel.after_idle(self._refresh_panel_layout)
+
         return panel
+
+    def _refresh_panel_layout(self):
+        self.frame.update_idletasks()
+        row_gap = 1
+        self.stage_time_label.place(
+            relx=0.5,
+            y=self.progress_label.winfo_y() + self.progress_label.winfo_height() + row_gap,
+            anchor="n",
+        )
+        self.frame.update_idletasks()
+        self.total_time_label.place(
+            relx=0.5,
+            y=self.stage_time_label.winfo_y() + self.stage_time_label.winfo_height() + row_gap,
+            anchor="n",
+        )
+        self.frame.update_idletasks()
+        self.stop_button.place(
+            relx=0.5,
+            y=self.total_time_label.winfo_y() + self.total_time_label.winfo_height() + 8,
+            anchor="n",
+        )
+        self.frame.update_idletasks()
+        panel_height = self.stop_button.winfo_y() + self.stop_button.winfo_height() + 15
+        self.frame.configure(height=panel_height)
+        self.background.configure(height=max(1, panel_height - 2))
+
+    def _refresh_progress_text(self):
+        parts = [f"(Imaging) {self._progress_text}"]
+        if self._processing_text:
+            parts.append(f"(Processing) {self._processing_text}")
+        self.progress_label.config(text=" | ".join(parts))
+        self._refresh_panel_layout()
 
     def set_stop_callback(self, callback):
         self.stop_callback = callback
@@ -217,7 +245,7 @@ class ScanStatusPanel:
             self.stage_label.config(text=f"Stage: {stage}")
 
         if progress is not None:
-            self.progress_label.config(text=f"Stage Progress: {progress}")
+            self._progress_text = progress
 
         if stage_elapsed_time is not None:
             self.stage_time_label.config(text=f"Stage Time Elapsed: {stage_elapsed_time}")
@@ -234,6 +262,11 @@ class ScanStatusPanel:
                 )
 
         if processing_state is not None:
-            self.processing_label.config(text=f"Processing: {processing_state}")
+            self._processing_text = (
+                None if processing_state == "Not required" else processing_state
+            )
 
-        self.frame.update_idletasks()
+        if progress is not None or processing_state is not None:
+            self._refresh_progress_text()
+        else:
+            self._refresh_panel_layout()

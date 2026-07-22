@@ -930,7 +930,7 @@ class ScanProfilePanel:
         if not hasattr(self, "status_group"):
             return
         self.status_group.update_idletasks()
-        panel_height = self.status_group_y + self.status_group.winfo_reqheight() + 10
+        panel_height = self.status_group_y + self.status_group.winfo_reqheight() + 15
         self.panel_frame.configure(height=panel_height)
         self.panel_background.configure(height=panel_height - 2)
 

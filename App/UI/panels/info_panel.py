@@ -10,7 +10,7 @@ class InfoPanel:
             self.parent,
             bg="#f0f0f0",
             width=204,
-            height=87
+            height=89
         )
         panel.place(relx=1.0, rely=0.0, anchor="ne")
 
@@ -18,7 +18,7 @@ class InfoPanel:
             panel,
             bg="white",
             width=200,
-            height=85
+            height=87
         )
         background.place(x=2, y=0)
 

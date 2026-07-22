@@ -69,14 +69,14 @@ class ViewScansPanel:
         self.content.place(x=8, y=8, width=184)
         self.content.columnconfigure(0, weight=1)
 
-        title = Label(
+        self.title_label = Label(
             self.content,
             text="Scan Results",
             bg="white",
             fg="black",
             font=("TkDefaultFont", 13),
         )
-        title.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        self.title_label.grid(row=0, column=0, sticky="ew", pady=(0, 8))
 
         self.scan_name_var = tk.StringVar(value="Scan: Not Selected")
 
@@ -138,12 +138,6 @@ class ViewScansPanel:
         )
         self.button_panel.grid_propagate(False)
 
-        self.fit_map_button = ttk.Button(
-            self.content,
-            text="Fit Map",
-            command=self.tile_viewer.fit_to_view,
-        )
-
         controls = Frame(self.button_panel, bg="white")
         controls.pack(expand=True, fill="both")
 
@@ -165,14 +159,12 @@ class ViewScansPanel:
 
         self._show_chip = True
         self._show_navigation = True
-        self._show_fit = False
         self._resize_job = None
         self.scan_name_var.trace_add("write", self._queue_panel_resize)
         self.image_var.trace_add("write", self._queue_panel_resize)
         self._layout_controls(
             show_chip=True,
             show_navigation=True,
-            show_fit=False,
         )
 
     def _queue_panel_resize(self, *_args):
@@ -182,7 +174,22 @@ class ViewScansPanel:
     def _refresh_panel_height(self):
         self._resize_job = None
         self.content.update_idletasks()
-        height = max(96, self.content.winfo_reqheight() + 16)
+        visible_elements = (
+            self.title_label,
+            self.scan_name_label,
+            self.chip_dropdown,
+            self.image_label,
+            self.button_panel,
+        )
+        bottom = max(
+            (
+                element.winfo_y() + element.winfo_height()
+                for element in visible_elements
+                if element.winfo_manager()
+            ),
+            default=0,
+        )
+        height = max(96, self.content.winfo_y() + bottom + 15)
         self.frame.configure(height=height)
         self.background.configure(height=max(1, height - 2))
 
@@ -190,30 +197,19 @@ class ViewScansPanel:
         self,
         show_chip=None,
         show_navigation=None,
-        show_fit=None,
     ):
         if show_chip is not None:
             self._show_chip = bool(show_chip)
         if show_navigation is not None:
             self._show_navigation = bool(show_navigation)
-        if show_fit is not None:
-            self._show_fit = bool(show_fit)
-
         if self._show_chip:
             self.chip_dropdown.grid()
         else:
             self.chip_dropdown.grid_remove()
 
         self.button_panel.grid_remove()
-        self.fit_map_button.grid_remove()
         if self._show_navigation:
             self.button_panel.grid(
-                row=4,
-                column=0,
-                pady=(0, 2),
-            )
-        elif self._show_fit:
-            self.fit_map_button.grid(
                 row=4,
                 column=0,
                 pady=(0, 2),
@@ -469,7 +465,6 @@ class ViewScansPanel:
         self._layout_controls(
             show_chip=False,
             show_navigation=False,
-            show_fit=False,
         )
 
         base_path = self.view_scan_path / "All Images"
@@ -483,7 +478,6 @@ class ViewScansPanel:
                 self._layout_controls(
                     show_chip=False,
                     show_navigation=False,
-                    show_fit=True,
                 )
                 self._load_flattened_map("map_2x.png", "Raw 2x", False)
                 return
@@ -496,7 +490,6 @@ class ViewScansPanel:
             self._layout_controls(
                 show_chip=False,
                 show_navigation=False,
-                show_fit=True,
             )
             if self.view_folder is not None:
                 self.load_current_folder()
@@ -511,7 +504,6 @@ class ViewScansPanel:
             self._layout_controls(
                 show_chip=False,
                 show_navigation=False,
-                show_fit=True,
             )
             self._load_flattened_map(
                 "map_2x_scan_windows.png",
@@ -608,7 +600,6 @@ class ViewScansPanel:
                 self._layout_controls(
                     show_chip=False,
                     show_navigation=False,
-                    show_fit=False,
                 )
                 self.image_var.set("Image: No flakes found")
                 self.tile_viewer.clear("No flakes found in this scan")
@@ -622,7 +613,6 @@ class ViewScansPanel:
         self._layout_controls(
             show_chip=self.chip_root is not None,
             show_navigation=not self.sparse_map_mode,
-            show_fit=self.sparse_map_mode,
         )
         self.load_current_folder()
 

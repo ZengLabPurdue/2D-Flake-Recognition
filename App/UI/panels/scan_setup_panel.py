@@ -274,8 +274,8 @@ class ScanSetupPanel:
             self.window_width_var.set(str(default_window[0]))
             self.window_height_var.set(str(default_window[1]))
             self.window_controls.place(relx=0.5, y=105, anchor="n")
-            self.frame.configure(height=255)
-            self.background.configure(height=253)
+            self.frame.configure(height=257)
+            self.background.configure(height=255)
             self.run_button.place(relx=0.5, y=214, anchor="n")
 
         self._on_detection_model_changed()
@@ -292,15 +292,15 @@ class ScanSetupPanel:
             self.load_profile_button.place(relx=0.5, y=255, anchor="n")
             self.run_button.state(["!disabled"])
             self.full_scan_controls.configure(height=280)
-            self.frame.configure(height=440)
-            self.background.configure(height=438)
+            self.frame.configure(height=442)
+            self.background.configure(height=440)
             self.run_button.place(relx=0.5, y=399, anchor="n")
         else:
             self.run_button.state(["!disabled"])
             if full_scan_selected:
                 self.full_scan_controls.configure(height=230)
-                self.frame.configure(height=365)
-                self.background.configure(height=363)
+                self.frame.configure(height=367)
+                self.background.configure(height=365)
                 self.run_button.place(relx=0.5, y=324, anchor="n")
 
         if event is not None:

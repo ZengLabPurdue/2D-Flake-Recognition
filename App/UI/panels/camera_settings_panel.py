@@ -49,7 +49,7 @@ class CameraSettingsPanel:
             self.parent,
             bg="#f0f0f0",
             width=204,
-            height=310,
+            height=308,
         )
         frame.place(relx=1.0, rely=0.0, anchor="ne")
 
@@ -57,7 +57,7 @@ class CameraSettingsPanel:
             frame,
             bg="white",
             width=200,
-            height=308,
+            height=306,
         )
         background.place(x=2, y=0)
 

@@ -436,7 +436,7 @@ class ScanManager:
         def report_processing(processed_count, queued_count):
             self.update_scan_status(
                 processing_state=(
-                    f"Processing images: {processed_count} processed, "
+                    f"{processed_count} processed, "
                     f"{queued_count} queued"
                 )
             )
