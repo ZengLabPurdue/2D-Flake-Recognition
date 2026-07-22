@@ -495,7 +495,6 @@ def _describe_seed_components(
 ):
     components = []
     for component_label in range(1, component_count):
-        component_mask = labels == component_label
         component_size = int(component_stats[component_label, cv2.CC_STAT_AREA])
         if component_size == 0:
             continue
@@ -503,12 +502,26 @@ def _describe_seed_components(
             int(round(value)) for value in centroids[component_label]
         )
         if (
-            not 0 <= seed_x < component_mask.shape[1]
-            or not 0 <= seed_y < component_mask.shape[0]
-            or not component_mask[seed_y, seed_x]
+            not 0 <= seed_x < labels.shape[1]
+            or not 0 <= seed_y < labels.shape[0]
+            or labels[seed_y, seed_x] != component_label
         ):
-            seed_y, seed_x = np.argwhere(component_mask)[0]
-            seed_x, seed_y = int(seed_x), int(seed_y)
+            left = int(component_stats[component_label, cv2.CC_STAT_LEFT])
+            top = int(component_stats[component_label, cv2.CC_STAT_TOP])
+            component_width = int(
+                component_stats[component_label, cv2.CC_STAT_WIDTH]
+            )
+            component_height = int(
+                component_stats[component_label, cv2.CC_STAT_HEIGHT]
+            )
+            relative_y, relative_x = np.argwhere(
+                labels[
+                    top:top + component_height,
+                    left:left + component_width,
+                ] == component_label
+            )[0]
+            seed_x = left + int(relative_x)
+            seed_y = top + int(relative_y)
         global_seed = (seed_x + x1, seed_y + y1)
         source_index = _timed_call(
             benchmark_stats,
@@ -520,10 +533,17 @@ def _describe_seed_components(
             depths,
         )
         components.append({
+            "component_label": component_label,
             "pixel_count": component_size,
             "global_seed": global_seed,
             "source_contour_index": source_index,
             "raw_depth": int(depths[source_index]),
+            "bounding_box": {
+                "x": int(x1 + component_stats[component_label, cv2.CC_STAT_LEFT]),
+                "y": int(y1 + component_stats[component_label, cv2.CC_STAT_TOP]),
+                "width": int(component_stats[component_label, cv2.CC_STAT_WIDTH]),
+                "height": int(component_stats[component_label, cv2.CC_STAT_HEIGHT]),
+            },
         })
     return components
 
@@ -590,6 +610,7 @@ def _extract_external_components(
         "x2": x2,
         "y2": y2,
         "local_external_mask": local_external_mask,
+        "component_labels": labels,
         "components": components,
         "outer_depth": outer_depth,
     }
@@ -604,6 +625,55 @@ def _prepare_flood_inputs(gray_image, external_region, local_seed):
         external_region["local_external_mask"] > 0,
         local_seed,
     )
+
+
+def _contour_component_mask(component_labels, component_label):
+    return component_labels == component_label
+
+
+def _measure_contour_color(
+    image_rgb,
+    component_mask,
+    x1,
+    y1,
+    x2,
+    y2,
+    background_color,
+):
+    mask = component_mask.astype(np.uint8) * 255
+    average_color = np.asarray(
+        cv2.mean(image_rgb[y1:y2, x1:x2], mask=mask)[:3],
+        dtype=np.float64,
+    )
+    return {
+        "average_color": average_color,
+        "contrast": np.rint(average_color - background_color),
+        "average_intensity": float(np.mean(average_color)),
+    }
+
+
+def _measure_contour_geometry(
+    component,
+    pixel_size_um,
+    minimum_size_um,
+    maximum_size_um,
+):
+    bounding_box = component["bounding_box"]
+    size_um = (
+        max(bounding_box["width"], bounding_box["height"]) * pixel_size_um
+        if pixel_size_um is not None
+        else None
+    )
+    return {
+        "pixel_count": component["pixel_count"],
+        "bounding_box": bounding_box,
+        "size_um": size_um,
+        "inside_profile_size": _size_matches(
+            size_um,
+            minimum_size_um,
+            maximum_size_um,
+        ),
+    }
 
 
 def _measure_region_geometry(
@@ -638,16 +708,6 @@ def _measure_region_geometry(
             minimum_size_um,
             maximum_size_um,
         ),
-    }
-
-
-def _measure_region_color(image_rgb, region_mask, x1, y1, x2, y2, background_color):
-    region_pixels = image_rgb[y1:y2, x1:x2][region_mask]
-    average_color = np.mean(region_pixels, axis=0)
-    return {
-        "average_color": average_color,
-        "contrast": np.rint(average_color - background_color),
-        "average_intensity": float(np.mean(average_color)),
     }
 
 
@@ -731,6 +791,7 @@ def _make_region_result(
     matched_class,
     filter_match,
     match,
+    flood_filled,
 ):
     average_color = color_measurement["average_color"]
     contrast = color_measurement["contrast"]
@@ -741,6 +802,8 @@ def _make_region_result(
         "source_contour_index": int(component["source_contour_index"]),
         "nesting_depth": nesting_depth,
         "seed_component_pixel_count": component["pixel_count"],
+        "classification_source": "contour_interior",
+        "flood_filled": flood_filled,
         "average_color_rgb": tuple(
             int(round(channel)) for channel in average_color
         ),
@@ -808,7 +871,7 @@ def classify_contour_regions(
     maximum_size_um=None,
     profile_filters=None,
 ):
-    """Flood every contour seed independently and retain overlapping classes."""
+    """Classify contour interiors first, then flood-fill identified regions."""
     _timed_call(
         benchmark_stats,
         "validate_classification_inputs",
@@ -865,79 +928,112 @@ def classify_contour_regions(
         for component in external_region["components"]:
             global_seed = component["global_seed"]
             local_seed = (global_seed[0] - x1, global_seed[1] - y1)
-            gray_region, allowed_mask, local_seed = _timed_call(
+            component_mask = _timed_call(
                 benchmark_stats,
-                "prepare_flood_inputs",
-                _prepare_flood_inputs,
-                gray_image,
-                external_region,
-                local_seed,
+                "build_contour_interior_mask",
+                _contour_component_mask,
+                external_region["component_labels"],
+                component["component_label"],
             )
-            region_mask = _timed_call(
-                benchmark_stats,
-                "flood_fill_region",
-                _flood_fill_region,
-                gray_region,
-                local_seed,
-                allowed_mask,
-                flood_fill_threshold,
-            )
-            geometry = _timed_call(
-                benchmark_stats,
-                "measure_region_geometry",
-                _measure_region_geometry,
-                region_mask,
-                x1,
-                y1,
-                pixel_size_um,
-                minimum_size_um,
-                maximum_size_um,
-            )
-            if geometry is None:
-                continue
-            depth_difference = (
-                component["raw_depth"] - external_region["outer_depth"]
-            )
-            nesting_depth = max(0, (depth_difference + 1) // 2)
-            region_type = "external" if nesting_depth == 0 else "internal"
             color_measurement = _timed_call(
                 benchmark_stats,
-                "measure_region_color",
-                _measure_region_color,
+                "measure_contour_color",
+                _measure_contour_color,
                 image_rgb,
-                region_mask,
+                component_mask,
                 x1,
                 y1,
                 x2,
                 y2,
                 workspace["background_color"],
             )
+            contour_geometry = _timed_call(
+                benchmark_stats,
+                "measure_contour_geometry",
+                _measure_contour_geometry,
+                component,
+                pixel_size_um,
+                minimum_size_um,
+                maximum_size_um,
+            )
+            depth_difference = (
+                component["raw_depth"] - external_region["outer_depth"]
+            )
+            nesting_depth = max(0, (depth_difference + 1) // 2)
+            region_type = "external" if nesting_depth == 0 else "internal"
             filter_match, match = _timed_call(
                 benchmark_stats,
                 "match_region",
                 _match_region,
                 color_measurement,
-                geometry,
+                contour_geometry,
                 profile_classes,
                 profile_filters,
                 benchmark_stats,
             )
             matched_filter = filter_match[1] if filter_match else None
             matched_class = match[1] if match else None
-            _timed_call(
-                benchmark_stats,
-                "update_region_masks",
-                _update_region_masks,
-                workspace,
-                region_mask,
-                x1,
-                y1,
-                x2,
-                y2,
-                region_type,
-                matched_filter,
-                matched_class,
-            )
+            region_mask = None
+            result_geometry = contour_geometry
+            flood_filled = False
+            if matched_class is not None:
+                gray_region, allowed_mask, local_seed = _timed_call(
+                    benchmark_stats,
+                    "prepare_flood_inputs",
+                    _prepare_flood_inputs,
+                    gray_image,
+                    external_region,
+                    local_seed,
+                )
+                region_mask = _timed_call(
+                    benchmark_stats,
+                    "flood_fill_region",
+                    _flood_fill_region,
+                    gray_region,
+                    local_seed,
+                    allowed_mask,
+                    flood_fill_threshold,
+                )
+                flooded_geometry = _timed_call(
+                    benchmark_stats,
+                    "measure_flooded_region_geometry",
+                    _measure_region_geometry,
+                    region_mask,
+                    x1,
+                    y1,
+                    pixel_size_um,
+                    minimum_size_um,
+                    maximum_size_um,
+                )
+                if flooded_geometry is not None:
+                    # Matching size is deliberately based on the full contour
+                    # interior. The flooded mask only refines output geometry.
+                    flooded_geometry["size_um"] = contour_geometry["size_um"]
+                    flooded_geometry["inside_profile_size"] = contour_geometry[
+                        "inside_profile_size"
+                    ]
+                    result_geometry = flooded_geometry
+                    flood_filled = True
+            elif matched_filter is not None:
+                # Filters reject before region creation. Their contour interior
+                # is retained only so preview output can show what was removed.
+                region_mask = component_mask
+
+            if region_mask is not None:
+                _timed_call(
+                    benchmark_stats,
+                    "update_region_masks",
+                    _update_region_masks,
+                    workspace,
+                    region_mask,
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    region_type,
+                    matched_filter,
+                    matched_class,
+                )
             workspace["region_results"].append(_timed_call(
                 benchmark_stats,
                 "build_region_result",
@@ -946,11 +1042,12 @@ def classify_contour_regions(
                 region_type,
                 nesting_depth,
                 color_measurement,
-                geometry,
+                result_geometry,
                 matched_filter,
                 matched_class,
                 filter_match,
                 match,
+                flood_filled,
             ))
 
     class_index_map, class_overlap_count_map = _timed_call(

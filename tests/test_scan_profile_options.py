@@ -333,6 +333,7 @@ class ScanProfileOptionsTests(unittest.TestCase):
             "tolerance": 2,
         }]
 
+        filter_stats = {}
         filtered = classify_contour_regions(
             image,
             np.zeros((12, 12), dtype=np.uint8),
@@ -343,6 +344,7 @@ class ScanProfileOptionsTests(unittest.TestCase):
             {0: [0]},
             [identify_class],
             2,
+            benchmark_stats=filter_stats,
             pixel_size_um=2,
             profile_filters=filters,
         )
@@ -364,8 +366,107 @@ class ScanProfileOptionsTests(unittest.TestCase):
         self.assertTrue(filtered["region_results"][0]["filtered"])
         self.assertEqual(filtered["region_results"][0]["filtered_by"], "Filter 1")
         self.assertIsNone(filtered["region_results"][0]["matched_class"])
+        self.assertNotIn("flood_fill_region", filter_stats)
         self.assertFalse(too_small["region_results"][0]["inside_profile_size"])
         self.assertFalse(too_small["region_results"][0]["filtered"])
+
+    def test_contour_colors_precede_flood_fill_and_exclude_nested_interiors(self):
+        image = np.full((60, 60, 3), 100, dtype=np.uint8)
+        image[2:51, 2:51] = (120, 100, 100)
+        image[20:41, 20:41] = (100, 130, 100)
+        external = np.asarray(
+            [[[2, 2]], [[50, 2]], [[50, 50]], [[2, 50]]],
+            dtype=np.int32,
+        )
+        internal = np.asarray(
+            [[[20, 20]], [[40, 20]], [[40, 40]], [[20, 40]]],
+            dtype=np.int32,
+        )
+        edge_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+        cv2.drawContours(edge_mask, [internal], -1, 255, 1)
+        hierarchy = np.asarray(
+            [[-1, -1, 1, -1], [-1, -1, -1, 0]],
+            dtype=np.int32,
+        )
+
+        def profile_class(name, contrast, index, color):
+            return {
+                "name": name,
+                "contrast_rgb": np.asarray(contrast, dtype=float),
+                "tolerance": 1,
+                "class_index": index,
+                "group": "",
+                "identify": True,
+                "minimum_size_um": None,
+                "maximum_size_um": None,
+                "display_color_rgb": color,
+            }
+
+        outer_class = profile_class("Outer", (20, 0, 0), 0, (255, 0, 0))
+        inner_class = profile_class("Inner", (0, 30, 0), 1, (0, 255, 0))
+        common_arguments = (
+            image,
+            edge_mask,
+            [external, internal],
+            hierarchy,
+            [external],
+            [0],
+            {0: [0, 1]},
+        )
+
+        both_stats = {}
+        both = classify_contour_regions(
+            *common_arguments,
+            [outer_class, inner_class],
+            1,
+            both_stats,
+        )
+        results_by_type = {
+            item["region_type"]: item for item in both["region_results"]
+        }
+
+        self.assertEqual(results_by_type["external"]["contrast_rgb"], (20, 0, 0))
+        self.assertEqual(results_by_type["external"]["matched_class"], "Outer")
+        self.assertEqual(results_by_type["internal"]["contrast_rgb"], (0, 30, 0))
+        self.assertEqual(results_by_type["internal"]["matched_class"], "Inner")
+        self.assertTrue(all(item["flood_filled"] for item in both["region_results"]))
+        self.assertEqual(both_stats["flood_fill_region"]["calls"], 2)
+
+        outer_only_stats = {}
+        outer_only = classify_contour_regions(
+            *common_arguments,
+            [outer_class],
+            1,
+            outer_only_stats,
+        )
+        unmatched = next(
+            item for item in outer_only["region_results"]
+            if item["region_type"] == "internal"
+        )
+
+        self.assertIsNone(unmatched["matched_class"])
+        self.assertFalse(unmatched["flood_filled"])
+        self.assertEqual(outer_only_stats["flood_fill_region"]["calls"], 1)
+
+        unrestricted = classify_contour_regions(
+            *common_arguments,
+            [outer_class],
+            255,
+        )
+        unrestricted_outer = next(
+            item for item in unrestricted["region_results"]
+            if item["region_type"] == "external"
+        )
+
+        # The internal contour is excluded from the outer color measurement,
+        # but it must not constrain the later flood-fill region.
+        self.assertEqual(unrestricted_outer["contrast_rgb"], (20, 0, 0))
+        self.assertGreater(
+            unrestricted_outer["pixel_count"],
+            unrestricted_outer["seed_component_pixel_count"],
+        )
+        self.assertEqual(unrestricted["matched_region_mask"][30, 30], 255)
+        self.assertEqual(unrestricted["matched_region_mask"][20, 20], 255)
 
     def test_in_memory_profile_configuration_runs_the_preview_pipeline(self):
         image = np.full((100, 100, 3), 180, dtype=np.uint8)
