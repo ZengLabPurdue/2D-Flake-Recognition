@@ -367,6 +367,8 @@ class ScanProfileOptionsTests(unittest.TestCase):
         self.assertEqual(filtered["region_results"][0]["filtered_by"], "Filter 1")
         self.assertIsNone(filtered["region_results"][0]["matched_class"])
         self.assertNotIn("flood_fill_region", filter_stats)
+        self.assertEqual(filter_stats["measure_contour_colors"]["calls"], 1)
+        self.assertEqual(filter_stats["build_filtered_contour_mask"]["calls"], 1)
         self.assertFalse(too_small["region_results"][0]["inside_profile_size"])
         self.assertFalse(too_small["region_results"][0]["filtered"])
 
@@ -430,6 +432,8 @@ class ScanProfileOptionsTests(unittest.TestCase):
         self.assertEqual(results_by_type["internal"]["contrast_rgb"], (0, 30, 0))
         self.assertEqual(results_by_type["internal"]["matched_class"], "Inner")
         self.assertTrue(all(item["flood_filled"] for item in both["region_results"]))
+        self.assertEqual(both_stats["measure_contour_colors"]["calls"], 1)
+        self.assertNotIn("build_filtered_contour_mask", both_stats)
         self.assertEqual(both_stats["flood_fill_region"]["calls"], 2)
 
         outer_only_stats = {}

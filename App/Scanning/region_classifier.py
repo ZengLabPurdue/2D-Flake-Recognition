@@ -610,6 +610,7 @@ def _extract_external_components(
         "x2": x2,
         "y2": y2,
         "local_external_mask": local_external_mask,
+        "component_count": component_count,
         "component_labels": labels,
         "components": components,
         "outer_depth": outer_depth,
@@ -631,24 +632,52 @@ def _contour_component_mask(component_labels, component_label):
     return component_labels == component_label
 
 
-def _measure_contour_color(
+def _measure_contour_colors(
     image_rgb,
-    component_mask,
+    component_labels,
+    component_count,
     x1,
     y1,
     x2,
     y2,
     background_color,
 ):
-    mask = component_mask.astype(np.uint8) * 255
-    average_color = np.asarray(
-        cv2.mean(image_rgb[y1:y2, x1:x2], mask=mask)[:3],
-        dtype=np.float64,
+    """Measure every connected contour interior in one exact label reduction."""
+    flat_labels = component_labels.reshape(-1)
+    flat_colors = np.ascontiguousarray(
+        image_rgb[y1:y2, x1:x2]
+    ).reshape(-1, 3)
+    pixel_counts = np.bincount(flat_labels, minlength=component_count).astype(
+        np.float64,
+    )
+    color_sums = np.column_stack([
+        np.bincount(
+            flat_labels,
+            weights=flat_colors[:, channel],
+            minlength=component_count,
+        )
+        for channel in range(3)
+    ])
+    average_colors = np.divide(
+        color_sums,
+        pixel_counts[:, np.newaxis],
+        out=np.zeros_like(color_sums),
+        where=pixel_counts[:, np.newaxis] > 0,
     )
     return {
-        "average_color": average_color,
-        "contrast": np.rint(average_color - background_color),
-        "average_intensity": float(np.mean(average_color)),
+        "average_colors": average_colors,
+        "contrasts": np.rint(average_colors - background_color),
+        "average_intensities": np.mean(average_colors, axis=1),
+    }
+
+
+def _component_color_measurement(color_measurements, component_label):
+    return {
+        "average_color": color_measurements["average_colors"][component_label],
+        "contrast": color_measurements["contrasts"][component_label],
+        "average_intensity": float(
+            color_measurements["average_intensities"][component_label]
+        ),
     }
 
 
@@ -925,27 +954,25 @@ def classify_contour_regions(
         y1 = external_region["y1"]
         x2 = external_region["x2"]
         y2 = external_region["y2"]
+        color_measurements = _timed_call(
+            benchmark_stats,
+            "measure_contour_colors",
+            _measure_contour_colors,
+            image_rgb,
+            external_region["component_labels"],
+            external_region["component_count"],
+            x1,
+            y1,
+            x2,
+            y2,
+            workspace["background_color"],
+        )
         for component in external_region["components"]:
             global_seed = component["global_seed"]
             local_seed = (global_seed[0] - x1, global_seed[1] - y1)
-            component_mask = _timed_call(
-                benchmark_stats,
-                "build_contour_interior_mask",
-                _contour_component_mask,
-                external_region["component_labels"],
+            color_measurement = _component_color_measurement(
+                color_measurements,
                 component["component_label"],
-            )
-            color_measurement = _timed_call(
-                benchmark_stats,
-                "measure_contour_color",
-                _measure_contour_color,
-                image_rgb,
-                component_mask,
-                x1,
-                y1,
-                x2,
-                y2,
-                workspace["background_color"],
             )
             contour_geometry = _timed_call(
                 benchmark_stats,
@@ -1017,7 +1044,13 @@ def classify_contour_regions(
             elif matched_filter is not None:
                 # Filters reject before region creation. Their contour interior
                 # is retained only so preview output can show what was removed.
-                region_mask = component_mask
+                region_mask = _timed_call(
+                    benchmark_stats,
+                    "build_filtered_contour_mask",
+                    _contour_component_mask,
+                    external_region["component_labels"],
+                    component["component_label"],
+                )
 
             if region_mask is not None:
                 _timed_call(
