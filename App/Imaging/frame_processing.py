@@ -102,6 +102,7 @@ class FrameProcessor:
         self.process_frame()
 
     def process_frame(self):
+        display_metrics = None
         try:
             if len(self.frame_buffer) == 0:
                 self.root.after(PROCESS_FRAME_RATE, self.process_frame)
@@ -145,15 +146,17 @@ class FrameProcessor:
                         self.app.disable_camera_vignette_filter(str(exc))
 
                 if self.app.get_camera_chip_filter():
-                    display = cv2.cvtColor(
+                    display_metrics = self.app.display_image(
                         chip_edge_classifier.chip_filter(camera_image),
-                        cv2.COLOR_GRAY2RGB,
+                        color_order="GRAY",
                     )
                 else:
-                    display = cv2.cvtColor(camera_image, cv2.COLOR_BGR2RGB)
-
-                self.app.display_image(display)
-
+                    # Resize the camera's native BGR frame before converting
+                    # the much smaller display image to RGB.
+                    display_metrics = self.app.display_image(
+                        camera_image,
+                        color_order="BGR",
+                    )
             elif self.app.get_view() == "Map":
                 self.app.display_map()
 
@@ -169,7 +172,20 @@ class FrameProcessor:
         
         self.display_last_time = new_time
 
-        self.app.info_panel.update_fps(self.camera_fps, self.display_fps)
+        self.app.info_panel.update_fps(
+            self.camera_fps,
+            self.display_fps,
+            render_ms=(
+                display_metrics["total_ms"]
+                if display_metrics is not None
+                else None
+            ),
+            render_backend=(
+                display_metrics["backend"]
+                if display_metrics is not None
+                else None
+            ),
+        )
 
         self.root.after(PROCESS_FRAME_RATE, self.process_frame)
 

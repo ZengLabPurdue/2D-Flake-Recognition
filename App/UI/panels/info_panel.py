@@ -10,7 +10,7 @@ class InfoPanel:
             self.parent,
             bg="#f0f0f0",
             width=204,
-            height=89
+            height=112,
         )
         panel.place(relx=1.0, rely=0.0, anchor="ne")
 
@@ -18,7 +18,7 @@ class InfoPanel:
             panel,
             bg="white",
             width=200,
-            height=87
+            height=110,
         )
         background.place(x=2, y=0)
 
@@ -47,17 +47,43 @@ class InfoPanel:
         )
         self.app_fps_label.place(relx=0.5, y=55, anchor="n")
 
+        self.render_label = Label(
+            panel,
+            text="Display: waiting",
+            bg="white",
+            fg="black",
+        )
+        self.render_label.place(relx=0.5, y=75, anchor="n")
+
         return panel
 
     def update_fps(
         self,
         camera_fps=None,
         app_fps=None,
+        render_ms=None,
+        render_backend=None,
     ):
         if camera_fps is not None:
-            self.camera_fps_label.config(text=f"Camera FPS: {camera_fps:.2f} fps")
+            self._set_text(
+                self.camera_fps_label,
+                f"Camera FPS: {camera_fps:.2f} fps",
+            )
 
         if app_fps is not None:
-            self.app_fps_label.config(text=f"App FPS: {app_fps:.2f} fps")
+            self._set_text(
+                self.app_fps_label,
+                f"App FPS: {app_fps:.2f} fps",
+            )
 
-        self.frame.update_idletasks()
+        if render_ms is not None:
+            backend = render_backend or "CPU"
+            self._set_text(
+                self.render_label,
+                f"Display: {render_ms:.1f} ms ({backend})",
+            )
+
+    @staticmethod
+    def _set_text(label, text):
+        if label.cget("text") != text:
+            label.config(text=text)

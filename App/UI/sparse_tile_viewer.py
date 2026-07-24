@@ -3,38 +3,53 @@
 from collections import OrderedDict
 from concurrent.futures import CancelledError, ThreadPoolExecutor
 import math
+import os
 from pathlib import Path
 import re
 import threading
+from time import perf_counter
 from tkinter import TclError
 
+import cv2
+import numpy as np
 from PIL import Image, ImageDraw, ImageTk
 
 from Imaging import image_metadata
+from UI.display_acceleration import (
+    CPU_BACKEND,
+    OPENCL_BACKEND,
+    opencl_available,
+    opencl_device_name,
+    requested_backend,
+)
 
 
 class SparseTileViewer:
     """Render just the scan tiles intersecting a pannable, zoomable viewport.
 
-    File decoding, pyramid sampling, and viewport composition happen on one
-    background worker.  The Tk thread only handles input, lightweight loading
-    placeholders, and publishing the completed ``PhotoImage``.
+    A background render worker coordinates a bounded image-decoding pool and
+    viewport composition. The Tk thread only handles input, lightweight
+    loading placeholders, and publishing the completed ``PhotoImage``.
     """
 
     OUTSIDE_MARGIN_RATIO = 0.04
     ZOOM_STEP = 1.25
     CACHE_LIMIT_BYTES = 128 * 1024 * 1024
+    GPU_CACHE_LIMIT_BYTES = 256 * 1024 * 1024
     BUCKET_SIZE = 512
     RENDER_DEBOUNCE_MS = 35
+    QUALITY_RENDER_DELAY_MS = 120
     POLL_INTERVAL_MS = 16
     PLACEHOLDER_ZOOM_RATIO = 1.5
     PLACEHOLDER_COLOR = "#eeeeee"
     RENDER_BUFFER_RATIO = 2.0
+    INTERACTIVE_RENDER_BUFFER_RATIO = 1.2
     RENDER_BUFFER_MAX_PIXELS = 12_000_000
     BUFFER_PREFETCH_GUARD_RATIO = 0.12
     MAX_SPARSE_RENDER_TILES = 64
     OVERVIEW_MIN_SAMPLE_FACTOR = 2
     MAX_SAMPLE_FACTOR = 128
+    DECODE_WORKERS = max(2, min(8, os.cpu_count() or 4))
 
     def __init__(self, canvas):
         self.canvas = canvas
@@ -56,8 +71,25 @@ class SparseTileViewer:
         self._poll_job = None
         self._photo = None
         self._buffer_view = None
+        self._last_render_metrics = None
         self._generation = 0
         self._shutdown = False
+
+        requested_renderer = requested_backend("FLAKE_SEARCH_MAP_RENDERER")
+        self.render_backend = (
+            OPENCL_BACKEND
+            if requested_renderer in ("auto", OPENCL_BACKEND) and opencl_available()
+            else CPU_BACKEND
+        )
+        self.render_device = (
+            opencl_device_name() if self.render_backend == OPENCL_BACKEND else None
+        )
+        self.render_fallback_reason = (
+            "OpenCL is unavailable"
+            if requested_renderer == OPENCL_BACKEND
+            and self.render_backend != OPENCL_BACKEND
+            else None
+        )
 
         # There is never more than one running task and one replaceable pending
         # task.  Rapid dragging therefore cannot build an unbounded executor
@@ -66,12 +98,21 @@ class SparseTileViewer:
             max_workers=1,
             thread_name_prefix="sparse-map-render",
         )
+        # PNG decompression dominates a cold detailed zoom. Independent image
+        # files can be decoded safely in parallel while the render worker
+        # preserves deterministic composition order.
+        self._decode_executor = ThreadPoolExecutor(
+            max_workers=self.DECODE_WORKERS,
+            thread_name_prefix="sparse-map-decode",
+        )
         self._future = None
         self._future_generation = None
         self._pending_task = None
 
         self._sampled_cache = OrderedDict()
         self._cache_bytes = 0
+        self._gpu_cache = OrderedDict()
+        self._gpu_cache_bytes = 0
         self._cache_lock = threading.Lock()
 
         canvas.configure(bg="black", highlightthickness=0, cursor="fleur")
@@ -231,6 +272,7 @@ class SparseTileViewer:
         if self._future is not None:
             self._future.cancel()
         self._executor.shutdown(wait=False, cancel_futures=True)
+        self._decode_executor.shutdown(wait=False, cancel_futures=True)
         self._clear_cache()
 
     def _on_configure(self, _event):
@@ -264,7 +306,10 @@ class SparseTileViewer:
         self.center_y = map_y - (screen_y - height / 2) / new_scale
         self.scale = new_scale
         self._clamp_center()
-        self._schedule_render(force_placeholder=True)
+        self._schedule_render(
+            force_placeholder=True,
+            interactive=True,
+        )
 
     def _start_pan(self, event):
         self._drag_position = (event.x, event.y)
@@ -322,7 +367,12 @@ class SparseTileViewer:
             else min(maximum_y, max(minimum_y, self.center_y))
         )
 
-    def _schedule_render(self, delay_ms=None, force_placeholder=False):
+    def _schedule_render(
+        self,
+        delay_ms=None,
+        force_placeholder=False,
+        interactive=False,
+    ):
         if self._shutdown or not self.records:
             return
         if delay_ms is None:
@@ -340,16 +390,19 @@ class SparseTileViewer:
         try:
             self._render_job = self.canvas.after(
                 max(0, int(delay_ms)),
-                lambda: self._queue_current_view(generation),
+                lambda: self._queue_current_view(generation, interactive),
             )
         except TclError:
             self._render_job = None
 
-    def _queue_current_view(self, generation):
+    def _queue_current_view(self, generation, interactive=False):
         self._render_job = None
         if self._shutdown or generation != self._generation or not self.records:
             return
-        snapshot = self._make_snapshot(generation)
+        snapshot = self._make_snapshot(
+            generation,
+            interactive=interactive,
+        )
         self._pending_task = {
             "kind": "render",
             "generation": generation,
@@ -528,12 +581,17 @@ class SparseTileViewer:
         self.nearest = result["nearest"]
         self.fit_to_view()
 
-    def _make_snapshot(self, generation):
+    def _make_snapshot(self, generation, interactive=False):
         viewport_width = max(1, self.canvas.winfo_width())
         viewport_height = max(1, self.canvas.winfo_height())
         width, height = self._render_buffer_dimensions(
             viewport_width,
             viewport_height,
+            ratio=(
+                self.INTERACTIVE_RENDER_BUFFER_RATIO
+                if interactive
+                else self.RENDER_BUFFER_RATIO
+            ),
         )
         # Do not allocate overscan along an axis where the whole map already
         # fits; there is nowhere useful to pan in that direction.
@@ -575,9 +633,11 @@ class SparseTileViewer:
             ),
             "title": self.title,
             "nearest": self.nearest,
+            "interactive": interactive,
         }
 
     def _compose_viewport(self, snapshot):
+        started_at = perf_counter()
         generation = snapshot["generation"]
         if self._is_stale(generation):
             return None
@@ -586,51 +646,36 @@ class SparseTileViewer:
         if render_records is None:
             return None
 
-        viewport = Image.new(
-            "RGB",
-            (snapshot["width"], snapshot["height"]),
-            "black",
-        )
-        failed_bounds = []
-        sample_factors = set()
-
-        for record in render_records:
-            if self._is_stale(generation):
-                return None
-            bounds = self._record_screen_bounds(record, snapshot)
-            if bounds is None:
-                continue
-
-            sample_factor = self._sample_factor(record, snapshot["scale"])
-            if using_overview:
-                sample_factor = max(
-                    self.OVERVIEW_MIN_SAMPLE_FACTOR,
-                    sample_factor,
-                )
-            sample_factors.add(sample_factor)
+        if self.render_backend == OPENCL_BACKEND:
             try:
-                sampled = self._sampled_tile(
-                    record,
-                    sample_factor,
-                    snapshot["nearest"],
-                    generation,
+                viewport, failed_bounds, sample_factors = (
+                    self._compose_viewport_opencl(
+                        snapshot,
+                        render_records,
+                        using_overview,
+                    )
                 )
-                if sampled is None:
-                    return None
-                tile = self._visible_tile_image(
-                    sampled,
-                    record,
+            except (AttributeError, TypeError, cv2.error, RuntimeError) as exc:
+                # OpenCL availability can change with drivers, displays, and
+                # remote sessions. Fall back without losing the requested view.
+                self.render_backend = CPU_BACKEND
+                self.render_device = None
+                self.render_fallback_reason = str(exc)
+                self._clear_gpu_cache()
+                viewport, failed_bounds, sample_factors = self._compose_viewport_cpu(
                     snapshot,
-                    bounds,
+                    render_records,
+                    using_overview,
                 )
-                if self._is_stale(generation):
-                    return None
-                viewport.paste(tile, (bounds[0], bounds[1]))
-            except (OSError, ValueError):
-                # A missing/corrupt tile remains an obvious gray placeholder,
-                # while valid neighboring tiles still finish rendering.
-                failed_bounds.append(bounds)
+        else:
+            viewport, failed_bounds, sample_factors = self._compose_viewport_cpu(
+                snapshot,
+                render_records,
+                using_overview,
+            )
 
+        if viewport is None:
+            return None
         if failed_bounds:
             draw = ImageDraw.Draw(viewport)
             for left, top, right, bottom in failed_bounds:
@@ -655,7 +700,200 @@ class SparseTileViewer:
             "view_top": snapshot["view_top"],
             "view_right": snapshot["view_right"],
             "view_bottom": snapshot["view_bottom"],
+            "render_backend": self.render_backend,
+            "render_device": self.render_device,
+            "render_ms": (perf_counter() - started_at) * 1000,
+            "render_tile_count": len(render_records),
+            "interactive": snapshot.get("interactive", False),
         }
+
+    def _prepare_render_tiles(self, snapshot, render_records, using_overview):
+        """Decode visible tiles concurrently, preserving their draw order."""
+        generation = snapshot["generation"]
+        specifications = []
+        failed_bounds = []
+        sample_factors = set()
+        for record in render_records:
+            if self._is_stale(generation):
+                return None, failed_bounds, sample_factors
+            bounds = self._record_screen_bounds(record, snapshot)
+            if bounds is None:
+                continue
+
+            sample_factor = self._sample_factor(record, snapshot["scale"])
+            if using_overview:
+                sample_factor = max(
+                    self.OVERVIEW_MIN_SAMPLE_FACTOR,
+                    sample_factor,
+                )
+            sample_factors.add(sample_factor)
+            specifications.append((record, bounds, sample_factor))
+
+        prepared = []
+        decode_executor = getattr(self, "_decode_executor", None)
+        futures = None
+        if decode_executor is not None and len(specifications) > 1:
+            try:
+                futures = [
+                    decode_executor.submit(
+                        self._sampled_tile,
+                        record,
+                        sample_factor,
+                        snapshot["nearest"],
+                        generation,
+                    )
+                    for record, _bounds, sample_factor in specifications
+                ]
+            except RuntimeError:
+                futures = None
+
+        for index, (record, bounds, sample_factor) in enumerate(specifications):
+            if self._is_stale(generation):
+                if futures is not None:
+                    for future in futures[index:]:
+                        future.cancel()
+                return None, failed_bounds, sample_factors
+            try:
+                sampled = (
+                    futures[index].result()
+                    if futures is not None
+                    else self._sampled_tile(
+                        record,
+                        sample_factor,
+                        snapshot["nearest"],
+                        generation,
+                    )
+                )
+                if sampled is None:
+                    if futures is not None:
+                        for future in futures[index + 1:]:
+                            future.cancel()
+                    return None, failed_bounds, sample_factors
+                prepared.append((record, bounds, sample_factor, sampled))
+            except (OSError, ValueError):
+                failed_bounds.append(bounds)
+
+        return prepared, failed_bounds, sample_factors
+
+    def _compose_viewport_cpu(self, snapshot, render_records, using_overview):
+        generation = snapshot["generation"]
+        viewport = Image.new(
+            "RGB",
+            (snapshot["width"], snapshot["height"]),
+            "black",
+        )
+        prepared, failed_bounds, sample_factors = self._prepare_render_tiles(
+            snapshot,
+            render_records,
+            using_overview,
+        )
+        if prepared is None:
+            return None, failed_bounds, sample_factors
+
+        for record, bounds, _sample_factor, sampled in prepared:
+            tile = self._visible_tile_image(
+                sampled,
+                record,
+                snapshot,
+                bounds,
+            )
+            if self._is_stale(generation):
+                return None, failed_bounds, sample_factors
+            viewport.paste(tile, (bounds[0], bounds[1]))
+
+        if self._is_stale(generation):
+            return None, failed_bounds, sample_factors
+        return viewport, failed_bounds, sample_factors
+
+    def _compose_viewport_opencl(self, snapshot, render_records, using_overview):
+        generation = snapshot["generation"]
+        cv2.ocl.setUseOpenCL(True)
+        if not cv2.ocl.useOpenCL():
+            raise RuntimeError("OpenCV could not activate the OpenCL device")
+        viewport_gpu = cv2.UMat(
+            snapshot["height"],
+            snapshot["width"],
+            cv2.CV_8UC3,
+        )
+        cv2.rectangle(
+            viewport_gpu,
+            (0, 0),
+            (snapshot["width"], snapshot["height"]),
+            (0, 0, 0),
+            thickness=-1,
+        )
+        prepared, failed_bounds, sample_factors = self._prepare_render_tiles(
+            snapshot,
+            render_records,
+            using_overview,
+        )
+        if prepared is None:
+            return None, failed_bounds, sample_factors
+
+        for record, bounds, sample_factor, sampled in prepared:
+            if self._is_stale(generation):
+                return None, failed_bounds, sample_factors
+            try:
+                sampled_gpu = self._gpu_sampled_tile(
+                    record,
+                    sample_factor,
+                    snapshot["nearest"],
+                    sampled,
+                    generation,
+                )
+                if sampled_gpu is None:
+                    return None, failed_bounds, sample_factors
+                source_box = self._visible_source_box(
+                    sampled,
+                    record,
+                    snapshot,
+                    bounds,
+                )
+                source_left = max(0, int(math.floor(source_box[0])))
+                source_top = max(0, int(math.floor(source_box[1])))
+                source_right = min(sampled.width, int(math.ceil(source_box[2])))
+                source_bottom = min(sampled.height, int(math.ceil(source_box[3])))
+                source_width = source_right - source_left
+                source_height = source_bottom - source_top
+                if source_width <= 0 or source_height <= 0:
+                    continue
+
+                destination_width = bounds[2] - bounds[0]
+                destination_height = bounds[3] - bounds[1]
+                source_roi = cv2.UMat(
+                    sampled_gpu,
+                    (source_left, source_top, source_width, source_height),
+                )
+                interpolation = (
+                    cv2.INTER_NEAREST
+                    if snapshot["nearest"]
+                    else (
+                        cv2.INTER_LINEAR
+                        if snapshot.get("interactive", False)
+                        else cv2.INTER_LANCZOS4
+                    )
+                )
+                resized = cv2.resize(
+                    source_roi,
+                    (destination_width, destination_height),
+                    interpolation=interpolation,
+                )
+                destination_roi = cv2.UMat(
+                    viewport_gpu,
+                    (
+                        bounds[0],
+                        bounds[1],
+                        destination_width,
+                        destination_height,
+                    ),
+                )
+                cv2.copyTo(resized, None, destination_roi)
+            except (OSError, ValueError):
+                failed_bounds.append(bounds)
+
+        if self._is_stale(generation):
+            return None, failed_bounds, sample_factors
+        return Image.fromarray(viewport_gpu.get()), failed_bounds, sample_factors
 
     def _select_render_records(self, snapshot):
         """Select a bounded sparse set, or one low-resolution overview."""
@@ -697,10 +935,16 @@ class SparseTileViewer:
         return max(1, min(cls.MAX_SAMPLE_FACTOR, largest_source_factor, factor))
 
     @classmethod
-    def _render_buffer_dimensions(cls, viewport_width, viewport_height):
+    def _render_buffer_dimensions(
+        cls,
+        viewport_width,
+        viewport_height,
+        ratio=None,
+    ):
         viewport_pixels = max(1, viewport_width * viewport_height)
         memory_ratio = math.sqrt(cls.RENDER_BUFFER_MAX_PIXELS / viewport_pixels)
-        ratio = max(1.0, min(cls.RENDER_BUFFER_RATIO, memory_ratio))
+        requested_ratio = cls.RENDER_BUFFER_RATIO if ratio is None else ratio
+        ratio = max(1.0, min(requested_ratio, memory_ratio))
         return (
             max(viewport_width, int(round(viewport_width * ratio))),
             max(viewport_height, int(round(viewport_height * ratio))),
@@ -719,6 +963,8 @@ class SparseTileViewer:
         return factor
 
     def _sampled_tile(self, record, factor, nearest, generation):
+        if self._is_stale(generation):
+            return None
         key = (str(record["path"].resolve()), factor, nearest)
         with self._cache_lock:
             cached = self._sampled_cache.pop(key, None)
@@ -748,6 +994,11 @@ class SparseTileViewer:
             with self._cache_lock:
                 if self._is_stale(generation):
                     return None
+                existing = self._sampled_cache.pop(key, None)
+                if existing is not None:
+                    self._cache_bytes -= (
+                        existing.width * existing.height * 3
+                    )
                 while (
                     self._sampled_cache
                     and self._cache_bytes + cache_size > self.CACHE_LIMIT_BYTES
@@ -758,10 +1009,48 @@ class SparseTileViewer:
                 self._cache_bytes += cache_size
         return sampled
 
+    def _gpu_sampled_tile(
+        self,
+        record,
+        factor,
+        nearest,
+        sampled,
+        generation,
+    ):
+        """Upload one pyramid tile once and retain it across view renders."""
+        key = (str(record["path"].resolve()), factor, nearest)
+        with self._cache_lock:
+            cached = self._gpu_cache.pop(key, None)
+            if cached is not None:
+                self._gpu_cache[key] = cached
+                if self._is_stale(generation):
+                    return None
+                return cached[0]
+
+        pixels = np.ascontiguousarray(np.asarray(sampled, dtype=np.uint8))
+        uploaded = cv2.UMat(pixels)
+        cache_size = int(pixels.nbytes)
+        if self._is_stale(generation):
+            return None
+
+        if cache_size <= self.GPU_CACHE_LIMIT_BYTES:
+            with self._cache_lock:
+                if self._is_stale(generation):
+                    return None
+                while (
+                    self._gpu_cache
+                    and self._gpu_cache_bytes + cache_size
+                    > self.GPU_CACHE_LIMIT_BYTES
+                ):
+                    _, removed = self._gpu_cache.popitem(last=False)
+                    self._gpu_cache_bytes -= removed[1]
+                self._gpu_cache[key] = (uploaded, cache_size)
+                self._gpu_cache_bytes += cache_size
+        return uploaded
+
     @staticmethod
-    def _visible_tile_image(sampled, record, snapshot, bounds):
+    def _visible_source_box(sampled, record, snapshot, bounds):
         left, top, right, bottom = bounds
-        destination_size = (right - left, bottom - top)
         scale = snapshot["scale"]
 
         map_left = snapshot["view_left"] + left / scale
@@ -769,7 +1058,7 @@ class SparseTileViewer:
         map_right = snapshot["view_left"] + right / scale
         map_bottom = snapshot["view_top"] + bottom / scale
 
-        source_box = (
+        return (
             max(0.0, (map_left - record["x"]) / record["width"] * sampled.width),
             max(0.0, (map_top - record["y"]) / record["height"] * sampled.height),
             min(
@@ -781,10 +1070,25 @@ class SparseTileViewer:
                 (map_bottom - record["y"]) / record["height"] * sampled.height,
             ),
         )
+
+    @staticmethod
+    def _visible_tile_image(sampled, record, snapshot, bounds):
+        left, top, right, bottom = bounds
+        destination_size = (right - left, bottom - top)
+        source_box = SparseTileViewer._visible_source_box(
+            sampled,
+            record,
+            snapshot,
+            bounds,
+        )
         resampling = (
             Image.Resampling.NEAREST
             if snapshot["nearest"]
-            else Image.Resampling.LANCZOS
+            else (
+                Image.Resampling.BILINEAR
+                if snapshot.get("interactive", False)
+                else Image.Resampling.LANCZOS
+            )
         )
         return sampled.resize(destination_size, resampling, box=source_box)
 
@@ -810,12 +1114,30 @@ class SparseTileViewer:
             self._maybe_prefetch()
             return
 
-        self._photo = ImageTk.PhotoImage(result["viewport"])
+        publish_started_at = perf_counter()
+        viewport = result["viewport"]
+        if (
+            self._photo is not None
+            and self._photo.width() == viewport.width
+            and self._photo.height() == viewport.height
+        ):
+            self._photo.paste(viewport)
+        else:
+            self._photo = ImageTk.PhotoImage(viewport)
+        result["publish_ms"] = (perf_counter() - publish_started_at) * 1000
+        self._last_render_metrics = result
         self._buffer_view = candidate_view
         covered = self._buffer_covers_current_view()
         self._display_render_buffer(loading=not covered)
         if covered:
-            self._maybe_prefetch()
+            if result.get("interactive", False):
+                # Refine the small, fast zoom preview with the normal
+                # overscanned, high-quality buffer after wheel input settles.
+                self._schedule_render(
+                    delay_ms=self.QUALITY_RENDER_DELAY_MS,
+                )
+            else:
+                self._maybe_prefetch()
         else:
             self._schedule_render(delay_ms=0)
 
@@ -946,6 +1268,7 @@ class SparseTileViewer:
     def _clear_render_buffer(self):
         self._photo = None
         self._buffer_view = None
+        self._last_render_metrics = None
 
     def _draw_overlay(
         self,
@@ -964,6 +1287,25 @@ class SparseTileViewer:
             levels = ", ".join(f"1/{factor}" for factor in sample_factors)
             source = "Overview" if using_overview else "Tile"
             status = f"{source} sample: {levels}"
+        metrics = self._last_render_metrics
+        if metrics is not None and not loading:
+            backend = metrics["render_backend"].upper()
+            if metrics.get("render_device"):
+                backend = f"{backend}: {metrics['render_device']}"
+            quality = (
+                "fast preview"
+                if metrics.get("interactive", False)
+                else "high quality"
+            )
+            timing = (
+                f"Render: {metrics['render_ms']:.1f} ms + "
+                f"Tk upload: {metrics.get('publish_ms', 0.0):.1f} ms "
+                f"({backend}, {metrics['render_tile_count']} tiles, {quality})"
+            )
+            status = f"{status}\n{timing}" if status else timing
+        if self.render_fallback_reason and self.render_backend == CPU_BACKEND:
+            fallback = "OpenCL unavailable; using CPU"
+            status = f"{status}\n{fallback}" if status else fallback
         status_line = f"{status}\n" if status else ""
         self.canvas.create_text(
             width / 2,
@@ -994,6 +1336,13 @@ class SparseTileViewer:
         with self._cache_lock:
             self._sampled_cache.clear()
             self._cache_bytes = 0
+            self._gpu_cache.clear()
+            self._gpu_cache_bytes = 0
+
+    def _clear_gpu_cache(self):
+        with self._cache_lock:
+            self._gpu_cache.clear()
+            self._gpu_cache_bytes = 0
 
     def _index_records(self):
         self._buckets = self._build_bucket_index(self.records)

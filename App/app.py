@@ -29,6 +29,7 @@ from UI.panels.view_scans_panel import ViewScansPanel
 from UI.panels.scan_profile_panel import ScanProfilePanel
 from UI.panels.capture_panel import CapturePanel
 from UI.panels.camera_settings_panel import CameraSettingsPanel
+from UI.display_acceleration import DisplayResizer
 from Imaging.frame_processing import FrameProcessor
 from Imaging.focus import FocusController
 
@@ -49,8 +50,13 @@ class App:
         self._last_map_render = 0.0
         self._map_render_interval_ms = 125
         self._map_state_lock = threading.RLock()
+        self._map_photo = None
+        self._map_canvas_image_id = None
         self._live_mapping_status = False
         self._scan_controls_locked = False
+        self._display_resizer = DisplayResizer()
+        self._display_photo = None
+        self._last_display_metrics = None
         self._schedule_ui_queue_poll()
 
         self.root.title("Scanning App")
@@ -439,6 +445,7 @@ class App:
             self._render_scheduled_map()
 
     def _render_scheduled_map(self):
+        started_at = time.perf_counter()
         self._map_render_job = None
         self._last_map_render = time.monotonic()
         canvas_width = self.map_canvas.winfo_width()
@@ -465,76 +472,145 @@ class App:
                 (new_width, new_height),
                 interpolation=cv2.INTER_NEAREST,
             )
-        self.map_image = Image.fromarray(map_resized.astype(np.uint8, copy=False))
-        self.tk_map_image = ImageTk.PhotoImage(self.map_image)
-
-        self.map_canvas.delete("all")
+        map_image = Image.fromarray(map_resized.astype(np.uint8, copy=False))
+        if (
+            self._map_photo is not None
+            and self._map_photo.width() == map_image.width
+            and self._map_photo.height() == map_image.height
+        ):
+            self._map_photo.paste(map_image)
+        else:
+            self._map_photo = ImageTk.PhotoImage(map_image)
+            if self._map_canvas_image_id is not None:
+                self.map_canvas.delete(self._map_canvas_image_id)
+                self._map_canvas_image_id = None
 
         x_center = canvas_width // 2
         y_center = canvas_height // 2
-        self.map_canvas.create_image(x_center, y_center, image=self.tk_map_image, anchor="center")
+        if self._map_canvas_image_id is None:
+            self._map_canvas_image_id = self.map_canvas.create_image(
+                x_center,
+                y_center,
+                image=self._map_photo,
+                anchor="center",
+            )
+        else:
+            self.map_canvas.coords(
+                self._map_canvas_image_id,
+                x_center,
+                y_center,
+            )
+            self.map_canvas.itemconfigure(
+                self._map_canvas_image_id,
+                image=self._map_photo,
+            )
+        self.info_panel.update_fps(
+            render_ms=(time.perf_counter() - started_at) * 1000,
+            render_backend="CPU",
+        )
 
-    def display_image(self, img_rgb):
-        h, w = img_rgb.shape[:2]
-
-        cx = w // 2
-        cy = h // 2
-
-        if self.view_mode == "Camera View":
-            if self.magnification == "2X":
-                crop_w = int(w * CROP_RATIO["2X"]["x"])
-                crop_h = int(h * CROP_RATIO["2X"]["y"])
-            elif self.magnification == "10X":
-                crop_w = int(w * CROP_RATIO["10X"]["x"])
-                crop_h = int(h * CROP_RATIO["10X"]["y"])
-            elif self.magnification == "20X":
-                crop_w = int(w * CROP_RATIO["20X"]["x"])
-                crop_h = int(h * CROP_RATIO["20X"]["y"])
-            elif self.magnification == "100X":
-                crop_w = int(w * CROP_RATIO["100X"]["x"])
-                crop_h = int(h * CROP_RATIO["100X"]["y"])
-            else:
-                crop_w = w
-                crop_h = h
-
-            x1 = cx - crop_w // 2
-            y1 = cy - crop_h // 2
-            x2 = cx + crop_w // 2
-            y2 = cy + crop_h // 2
-
-            img_rgb = img_rgb.copy()
-            cv2.rectangle(img_rgb, (x1, y1), (x2, y2), (0, 255, 0), 5)
-
-            cv2.circle(img_rgb, (cx, cy), radius=5, color=(255, 0, 0), thickness=-1)
-
-        img_pil = Image.fromarray(img_rgb)
-
+    def display_image(self, image, color_order="RGB"):
+        """Present an image after resizing before conversion and annotation."""
+        started_at = time.perf_counter()
+        h, w = image.shape[:2]
         lbl_w = self.img_label.winfo_width() or self.width
         lbl_h = self.img_label.winfo_height() or self.height
-
         if lbl_w < 10 or lbl_h < 10:
-            return
+            return None
 
-        img_pil_copy = img_pil.copy()
-        img_pil_copy.thumbnail((lbl_w, lbl_h), Image.Resampling.LANCZOS)
+        scale = min(lbl_w / w, lbl_h / h)
+        display_width = max(1, min(lbl_w, int(round(w * scale))))
+        display_height = max(1, min(lbl_h, int(round(h * scale))))
+        interpolation = (
+            cv2.INTER_AREA
+            if display_width < w or display_height < h
+            else cv2.INTER_LINEAR
+        )
+        resized, resize_seconds = self._display_resizer.resize(
+            image,
+            (display_width, display_height),
+            interpolation,
+        )
 
-        display_img = Image.new("RGB", (lbl_w, lbl_h), "#f0f0f0")
-        x_offset = (lbl_w - img_pil_copy.width) // 2
-        y_offset = (lbl_h - img_pil_copy.height) // 2
-        display_img.paste(img_pil_copy, (x_offset, y_offset))
+        convert_started_at = time.perf_counter()
+        color_order = color_order.upper()
+        if color_order == "BGR":
+            display_rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        elif color_order == "GRAY":
+            display_rgb = cv2.cvtColor(resized, cv2.COLOR_GRAY2RGB)
+        elif color_order == "RGB":
+            display_rgb = np.ascontiguousarray(resized)
+        else:
+            raise ValueError(f"Unsupported display color order: {color_order}")
+        convert_seconds = time.perf_counter() - convert_started_at
+
+        overlay_started_at = time.perf_counter()
+        if self.view_mode == "Camera View":
+            crop_ratio = CROP_RATIO.get(
+                self.magnification,
+                {"x": 1.0, "y": 1.0},
+            )
+            center_x = display_width // 2
+            center_y = display_height // 2
+            crop_width = int(round(display_width * crop_ratio["x"]))
+            crop_height = int(round(display_height * crop_ratio["y"]))
+            x1 = center_x - crop_width // 2
+            y1 = center_y - crop_height // 2
+            x2 = center_x + crop_width // 2
+            y2 = center_y + crop_height // 2
+            line_width = max(1, int(round(5 * scale)))
+            marker_radius = max(2, int(round(5 * scale)))
+            cv2.rectangle(
+                display_rgb,
+                (x1, y1),
+                (x2, y2),
+                (0, 255, 0),
+                line_width,
+            )
+            cv2.circle(
+                display_rgb,
+                (center_x, center_y),
+                radius=marker_radius,
+                color=(255, 0, 0),
+                thickness=-1,
+            )
+        overlay_seconds = time.perf_counter() - overlay_started_at
+
+        x_offset = (lbl_w - display_width) // 2
+        y_offset = (lbl_h - display_height) // 2
 
         self._displayed_image_bounds = (
             x_offset,
             y_offset,
-            img_pil_copy.width,
-            img_pil_copy.height,
+            display_width,
+            display_height,
             w,
             h,
         )
 
-        img_tk = ImageTk.PhotoImage(display_img)
-        self.img_label.configure(image=img_tk, text="")
-        self.img_label.image = img_tk
+        publish_started_at = time.perf_counter()
+        display_image = Image.fromarray(display_rgb)
+        if (
+            self._display_photo is not None
+            and self._display_photo.width() == display_width
+            and self._display_photo.height() == display_height
+        ):
+            self._display_photo.paste(display_image)
+        else:
+            self._display_photo = ImageTk.PhotoImage(display_image)
+        self.img_label.configure(image=self._display_photo, text="", anchor="center")
+        self.img_label.image = self._display_photo
+        publish_seconds = time.perf_counter() - publish_started_at
+
+        self._last_display_metrics = {
+            "backend": self._display_resizer.label,
+            "resize_ms": resize_seconds * 1000,
+            "convert_ms": convert_seconds * 1000,
+            "overlay_ms": overlay_seconds * 1000,
+            "publish_ms": publish_seconds * 1000,
+            "total_ms": (time.perf_counter() - started_at) * 1000,
+        }
+        return self._last_display_metrics
 
     def display_image_message(self, message):
         """Clear the current image and show a centered instruction instead."""
@@ -547,6 +623,7 @@ class App:
             anchor="center",
         )
         self.img_label.image = None
+        self._display_photo = None
 
     # ------------- Util Functions -------------
 
