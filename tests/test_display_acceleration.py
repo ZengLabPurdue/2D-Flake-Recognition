@@ -23,6 +23,28 @@ from UI.display_acceleration import (  # noqa: E402
     requested_backend,
 )
 from UI.sparse_tile_viewer import SparseTileViewer  # noqa: E402
+from UI.panels.view_scans_panel import ViewScansPanel  # noqa: E402
+
+
+class _FakeCanvas:
+    @staticmethod
+    def winfo_width():
+        return 800
+
+    @staticmethod
+    def winfo_height():
+        return 600
+
+
+class _FakeVariable:
+    def __init__(self, value=False):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = value
 
 
 class DisplayAccelerationTests(unittest.TestCase):
@@ -72,6 +94,77 @@ class DisplayAccelerationTests(unittest.TestCase):
         )
 
         self.assertIsNone(sampled)
+
+    def test_map_view_state_preserves_relative_position_and_zoom(self):
+        source = self._viewer_without_tk()
+        source.records = [object()]
+        source.map_width = 1000.0
+        source.map_height = 1000.0
+        source.center_x = 400.0
+        source.center_y = 600.0
+        source.minimum_scale = 0.2
+        source.scale = 0.4
+        state = source.capture_view_state()
+
+        target = self._viewer_without_tk()
+        target.records = [object()]
+        target.canvas = _FakeCanvas()
+        target.map_width = 2000.0
+        target.map_height = 2000.0
+        target.maximum_scale = 1.0
+        scheduled = []
+        target._schedule_render = lambda **kwargs: scheduled.append(kwargs)
+
+        target._apply_view_state(state)
+
+        self.assertAlmostEqual(target.center_x, 800.0)
+        self.assertAlmostEqual(target.center_y, 1200.0)
+        self.assertAlmostEqual(
+            target.scale / target.minimum_scale,
+            2.0,
+        )
+        self.assertTrue(scheduled)
+
+    def test_filtered_map_toggle_maps_2x_and_10x_layers(self):
+        for current_view, checked, expected_view in (
+            ("Raw 2x", True, "Filtered 2x"),
+            ("Filtered 2x", False, "Raw 2x"),
+            ("Raw 10x", True, "Processed 10x"),
+            ("Processed 10x", False, "Raw 10x"),
+        ):
+            with self.subTest(current_view=current_view):
+                panel = ViewScansPanel.__new__(ViewScansPanel)
+                panel.selected_view = current_view
+                pair = panel._map_layer_pair(current_view)
+                panel.available_result_views = set(pair)
+                panel.filtered_map_var = _FakeVariable(checked)
+                expected_state = {
+                    "center_x_ratio": 0.4,
+                    "center_y_ratio": 0.6,
+                    "zoom_ratio": 3.0,
+                }
+                panel.tile_viewer = type(
+                    "_Viewer",
+                    (),
+                    {
+                        "capture_view_state": (
+                            lambda _self: expected_state
+                        )
+                    },
+                )()
+                calls = []
+                panel.set_view_folder = (
+                    lambda view, **kwargs: calls.append((view, kwargs))
+                )
+
+                panel._toggle_filtered_map()
+
+                self.assertEqual(calls[0][0], expected_view)
+                self.assertEqual(
+                    calls[0][1]["view_state"],
+                    expected_state,
+                )
+                self.assertTrue(calls[0][1]["preserve_context"])
 
     def test_map_opencl_failure_falls_back_to_cpu(self):
         viewer = self._viewer_without_tk()

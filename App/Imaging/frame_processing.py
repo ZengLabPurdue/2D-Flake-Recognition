@@ -154,6 +154,7 @@ class FrameProcessor:
                     if stage_position is not None:
                         self.capture_after_move = False
                         cropped = self.crop_frame(img)
+                        cropped = self.apply_vignette_filter(cropped)
                         self.place_frame_on_map(
                             cropped,
                             zoom=3,
@@ -591,7 +592,7 @@ class FrameProcessor:
     def apply_vignette_filter(self, image):
         self.load_vignette_filter(image.shape)
         vignette_gain = self.vignette_gain
-        if vignette_gain.shape != image.shape[:2]:
+        if vignette_gain.shape[:2] != image.shape[:2]:
             vignette_gain = self.crop_frame(vignette_gain)
         return vignetting_corrector.apply_vignette_gain(image, vignette_gain)
 

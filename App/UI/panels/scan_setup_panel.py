@@ -78,6 +78,11 @@ class ScanSetupPanel:
             background="white",
             relief="flat",
         )
+        style.configure(
+            "ScanSetup.TCheckbutton",
+            background="white",
+            foreground="black",
+        )
 
         Label(
             self.background,
@@ -253,6 +258,7 @@ class ScanSetupPanel:
             self.full_scan_controls,
             text="Show legend in flake results",
             variable=self.class_legend_var,
+            style="ScanSetup.TCheckbutton",
         )
 
     def show(self):

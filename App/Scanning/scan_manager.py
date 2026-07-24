@@ -33,6 +33,11 @@ class ScanManager:
         "Complete Scan (1 Chip)": (5, 5),
         "Full Stage Scan": (50, 25),
     }
+    RETURN_TO_START_SCAN_TYPES = set(COMPLETE_SCAN_WINDOWS) | {
+        "2x Scan",
+        "10x Scan",
+        "20x Scan",
+    }
 
     def __init__(
         self,
@@ -191,8 +196,12 @@ class ScanManager:
         }
         self.update_scan_status(processing_state="Waiting")
 
+        starting_xy = None
+        restored_to_start = False
         try:
             self._wait_for_existing_focus()
+            if scan_type in self.RETURN_TO_START_SCAN_TYPES:
+                starting_xy = self.stage.get_xy_position(strict=True)
             if scan_type in self.COMPLETE_SCAN_WINDOWS:
                 if detection_model not in ("Flake Detection", "Region Detection"):
                     raise ValueError(f"Unknown detection model: {detection_model}")
@@ -258,6 +267,10 @@ class ScanManager:
                 raise ValueError(f"Unknown scan type: {scan_type}")
 
             self._check_cancelled()
+            if starting_xy is not None:
+                self.update_scan_status(processing_state="Returning to start")
+                self._restore_stage_xy(starting_xy)
+                restored_to_start = True
             self.update_scan_status(
                 stage="Complete",
                 progress="100%",
@@ -282,6 +295,16 @@ class ScanManager:
             )
             raise
         finally:
+            if starting_xy is not None and not restored_to_start:
+                try:
+                    self._restore_stage_xy(starting_xy)
+                except Exception as error:
+                    # Preserve the original scan/cancellation result. A failed
+                    # restoration after a successful scan is raised above.
+                    print(
+                        "Could not return the stage to the scan starting "
+                        f"position {starting_xy}: {error}"
+                    )
             self.scan_running = False
             self._scan_execution_thread_id = None
             if self.set_scan_running is not None:
@@ -321,6 +344,22 @@ class ScanManager:
             cancel_check=self._check_cancelled,
         ):
             raise RuntimeError("The stage could not start the requested XY move.")
+        expected_xy = (
+            self.stage.last_confirmed_xy
+            or (int(round(x)), int(round(y)))
+        )
+        self.frame_processor.arm_capture_after_motion(expected_xy)
+        return expected_xy
+
+    def _restore_stage_xy(self, starting_xy):
+        """Return to a pre-scan XY even when the scan was cancelled."""
+        x, y = starting_xy
+        self.stage.wait_until_not_busy()
+        if not self.stage.move_to_xy(x, y, wait=True):
+            raise RuntimeError(
+                "The stage could not start the move back to the scan "
+                f"starting position ({x}, {y})."
+            )
         expected_xy = (
             self.stage.last_confirmed_xy
             or (int(round(x)), int(round(y)))

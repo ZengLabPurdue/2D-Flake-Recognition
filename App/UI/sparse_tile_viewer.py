@@ -158,6 +158,7 @@ class SparseTileViewer:
         nearest=False,
         on_empty=None,
         overview_path=None,
+        view_state=None,
     ):
         """Index positioned PNG tiles without blocking the Tk event loop.
 
@@ -194,11 +195,18 @@ class SparseTileViewer:
             "title": title,
             "nearest": nearest,
             "on_empty": on_empty,
+            "view_state": view_state,
         }
         self._start_pending_task()
         return True
 
-    def load_image(self, image_path, title="", nearest=False):
+    def load_image(
+        self,
+        image_path,
+        title="",
+        nearest=False,
+        view_state=None,
+    ):
         """Load a single image through the same asynchronous viewport renderer."""
         image_path = Path(image_path)
         try:
@@ -234,10 +242,31 @@ class SparseTileViewer:
         self.nearest = nearest
         self._clear_render_buffer()
         self._clear_cache()
-        self.fit_to_view()
+        self._apply_view_state(view_state)
         return True
 
     def fit_to_view(self):
+        if self._shutdown or not self.records:
+            return
+        self._apply_view_state(None)
+
+    def capture_view_state(self):
+        """Return a map-size-independent pan and zoom snapshot."""
+        if (
+            self._shutdown
+            or not self.records
+            or self.map_width <= 0
+            or self.map_height <= 0
+            or self.minimum_scale <= 0
+        ):
+            return None
+        return {
+            "center_x_ratio": self.center_x / self.map_width,
+            "center_y_ratio": self.center_y / self.map_height,
+            "zoom_ratio": self.scale / self.minimum_scale,
+        }
+
+    def _apply_view_state(self, view_state):
         if self._shutdown or not self.records:
             return
         width = max(1, self.canvas.winfo_width())
@@ -250,9 +279,35 @@ class SparseTileViewer:
             available_height / max(1.0, self.map_height),
         )
         self.maximum_scale = max(self.minimum_scale, self.maximum_scale)
-        self.scale = self.minimum_scale
-        self.center_x = self.map_width / 2
-        self.center_y = self.map_height / 2
+        if view_state is None:
+            self.scale = self.minimum_scale
+            self.center_x = self.map_width / 2
+            self.center_y = self.map_height / 2
+        else:
+            try:
+                center_x_ratio = float(view_state["center_x_ratio"])
+                center_y_ratio = float(view_state["center_y_ratio"])
+                zoom_ratio = float(view_state["zoom_ratio"])
+                if not all(
+                    math.isfinite(value)
+                    for value in (
+                        center_x_ratio,
+                        center_y_ratio,
+                        zoom_ratio,
+                    )
+                ):
+                    raise ValueError("non-finite viewport state")
+            except (KeyError, TypeError, ValueError):
+                center_x_ratio = 0.5
+                center_y_ratio = 0.5
+                zoom_ratio = 1.0
+            self.scale = min(
+                self.maximum_scale,
+                max(self.minimum_scale, self.minimum_scale * zoom_ratio),
+            )
+            self.center_x = center_x_ratio * self.map_width
+            self.center_y = center_y_ratio * self.map_height
+            self._clamp_center()
         self._schedule_render(delay_ms=0, force_placeholder=True)
 
     def pause(self):
@@ -556,6 +611,7 @@ class SparseTileViewer:
             "title": task["title"],
             "nearest": task["nearest"],
             "on_empty": task["on_empty"],
+            "view_state": task.get("view_state"),
         }
 
     def _apply_index_result(self, result):
@@ -579,7 +635,7 @@ class SparseTileViewer:
         )
         self.title = result["title"]
         self.nearest = result["nearest"]
-        self.fit_to_view()
+        self._apply_view_state(result.get("view_state"))
 
     def _make_snapshot(self, generation, interactive=False):
         viewport_width = max(1, self.canvas.winfo_width())
