@@ -52,8 +52,7 @@ class Mapper:
         self.last_live_map_x = None
         self.last_live_map_y = None
 
-        self.was_busy = False
-        self.capture_after_move = False
+        self.frame_processor.reset_live_mapping_capture()
 
         self.app.display_map()
         return True
@@ -71,11 +70,27 @@ class Mapper:
 
     def _move_stage_xy(self, x, y, check_cancelled=None):
         self.stage.wait_until_not_busy(cancel_check=check_cancelled)
-        if not self.stage.move_to_xy(x, y, wait=False):
+        if not self.stage.move_to_xy(
+            x,
+            y,
+            wait=True,
+            cancel_check=check_cancelled,
+        ):
             raise RuntimeError("The stage could not start the requested XY move.")
-        self.stage.wait_until_not_busy(cancel_check=check_cancelled)
+        expected_xy = (
+            self.stage.last_confirmed_xy
+            or (int(round(x)), int(round(y)))
+        )
+        self.frame_processor.arm_capture_after_motion(expected_xy)
+        return expected_xy
 
-    def place_frame_on_map(self, img, zoom, filter_img=None):
+    def place_frame_on_map(
+        self,
+        img,
+        zoom,
+        filter_img=None,
+        stage_position=None,
+    ):
 
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
@@ -86,7 +101,10 @@ class Mapper:
 
         h, w = img_rgb.shape[:2]
 
-        cur_X, cur_Y, _ = self.stage.get_position()
+        if stage_position is None:
+            cur_X, cur_Y, _ = self.stage.get_position(strict=True)
+        else:
+            cur_X, cur_Y = stage_position
         dx_um = cur_X - self.stage_center_x
         dy_um = cur_Y - self.stage_center_y
 
@@ -434,7 +452,7 @@ class Mapper:
                     / 2
                 )
 
-                self._move_stage_xy(
+                stage_position = self._move_stage_xy(
                     target_x,
                     target_y,
                     check_cancelled=check_cancelled,
@@ -450,7 +468,11 @@ class Mapper:
 
                 img = self.frame_processor.apply_vignette_filter(img)
 
-                placement = self.place_frame_on_map(img, zoom=zoom)
+                placement = self.place_frame_on_map(
+                    img,
+                    zoom=zoom,
+                    stage_position=stage_position,
+                )
                 if placement is None:
                     continue
                 captured_tiles += 1
@@ -465,8 +487,8 @@ class Mapper:
                             **placement,
                             "map_id": "2x-map-1",
                             "map_index": 1,
-                            "stage_x_um": float(target_x),
-                            "stage_y_um": float(target_y),
+                            "stage_x_um": float(stage_position[0]),
+                            "stage_y_um": float(stage_position[1]),
                         },
                     )
 

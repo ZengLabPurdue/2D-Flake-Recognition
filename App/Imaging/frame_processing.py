@@ -2,6 +2,7 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 import ctypes
+import threading
 import time
 
 import cv2
@@ -36,6 +37,11 @@ class FrameProcessor:
 
         self.frame_id = 0
         self.frame_buffer = deque(maxlen=5)
+        self._frame_condition = threading.Condition()
+        self._capture_barrier = None
+        self._live_capture_min_frame_id = None
+        self._live_capture_expected_xy = None
+        self._camera_flush_warning_shown = False
 
         self.last_used_capture_frame_id = -1
         self.last_processed_frame_id = -1
@@ -74,15 +80,18 @@ class FrameProcessor:
             frame_data = {
                 "frame": img,
                 "timestamp": time.time(),
+                "monotonic_timestamp": time.monotonic(),
                 "x": x,
                 "y": y,
                 "z": z,
-                "frame_id": self.frame_id,
                 "stage_busy": self.stage.is_busy(),
             }
 
-            self.frame_buffer.append(frame_data)
-            self.frame_id += 1
+            with self._frame_condition:
+                frame_data["frame_id"] = self.frame_id
+                self.frame_buffer.append(frame_data)
+                self.frame_id += 1
+                self._frame_condition.notify_all()
 
             new_time = time.perf_counter()
             dt = new_time - self.camera_last_time
@@ -99,6 +108,8 @@ class FrameProcessor:
     def start_processing_loop(self):
         self.last_used_capture_frame_id = -1
         self.last_processed_frame_id = -1
+        self._capture_barrier = None
+        self.reset_live_mapping_capture()
         self.process_frame()
 
     def process_frame(self):
@@ -123,19 +134,31 @@ class FrameProcessor:
             if self.get_live_mapping():
                 busy = self.stage.is_busy()
 
-                if self.was_busy and not busy:
+                if busy:
+                    self.was_busy = True
+                    self.capture_after_move = False
+                elif self.was_busy:
+                    stage_x, stage_y, _stage_z = self.stage.get_position(
+                        strict=True
+                    )
+                    self.was_busy = False
                     self.capture_after_move = True
-
-                self.was_busy = busy
+                    self._arm_live_map_capture((stage_x, stage_y))
 
                 if busy:
                     self.root.after(PROCESS_FRAME_RATE, self.process_frame)
                     return
 
                 if self.capture_after_move:
-                    self.capture_after_move = False
-                    cropped = self.crop_frame(img)
-                    self.place_frame_on_map(cropped, zoom=3)
+                    stage_position = self._consume_live_map_frame(data)
+                    if stage_position is not None:
+                        self.capture_after_move = False
+                        cropped = self.crop_frame(img)
+                        self.place_frame_on_map(
+                            cropped,
+                            zoom=3,
+                            stage_position=stage_position,
+                        )
 
             if self.app.get_view() == "Camera View":
                 camera_image = img
@@ -238,66 +261,247 @@ class FrameProcessor:
         max_speed = self.hcam.MaxSpeed()
         self.hcam.put_Speed(max_speed)
 
-    def capture_frame(
-        self,
-        num_images=1,
-        cancel_check=None,
-        timeout_seconds=None,
-    ): #TODO: Figure out last position mixing bug
-        if cancel_check is not None:
-            cancel_check()
-        if len(self.frame_buffer) == 0:
-            print("No frames available.")
-            return None
+    def reset_live_mapping_capture(self):
+        self.was_busy = False
+        self.capture_after_move = False
+        self._live_capture_min_frame_id = None
+        self._live_capture_expected_xy = None
 
-        sum_frame = np.zeros_like(
-            self.frame_buffer[-1]["frame"],
-            dtype=np.float32
+    def _flush_camera_queue(self, discard_frames=1):
+        if self.hcam is not None:
+            try:
+                # Flush camera DDR and both SDK-side frame deques. A callback
+                # already in progress is handled by discarding the next frame.
+                self.hcam.put_Option(amcam.AMCAM_OPTION_FLUSH, 3)
+            except Exception as exc:
+                if not self._camera_flush_warning_shown:
+                    print(
+                        "Camera queue flush is unavailable; using the "
+                        f"software frame barrier instead: {exc}"
+                    )
+                    self._camera_flush_warning_shown = True
+        with self._frame_condition:
+            self.frame_buffer.clear()
+            return self.frame_id + max(0, int(discard_frames))
+
+    def arm_capture_after_motion(self, expected_xy):
+        """Flush moving-stage frames and bind the next capture to one XY."""
+        expected_xy = (
+            int(round(expected_xy[0])),
+            int(round(expected_xy[1])),
+        )
+        minimum_frame_id = self._flush_camera_queue(discard_frames=1)
+        with self._frame_condition:
+            self._capture_barrier = (
+                minimum_frame_id,
+                expected_xy,
+                getattr(self.stage, "motion_sequence", None),
+            )
+            self._frame_condition.notify_all()
+        return expected_xy
+
+    def _arm_live_map_capture(self, expected_xy):
+        minimum_frame_id = self._flush_camera_queue(discard_frames=1)
+        with self._frame_condition:
+            self._live_capture_min_frame_id = minimum_frame_id
+            self._live_capture_expected_xy = (
+                int(round(expected_xy[0])),
+                int(round(expected_xy[1])),
+            )
+
+    def _frame_matches_barrier(
+        self,
+        data,
+        minimum_frame_id,
+        expected_xy,
+    ):
+        if data["frame_id"] < minimum_frame_id or data["stage_busy"]:
+            return False
+        if expected_xy is None:
+            return True
+        tolerance = getattr(self.stage, "POSITION_TOLERANCE_UM", 1.0)
+        return (
+            abs(data["x"] - expected_xy[0]) <= tolerance
+            and abs(data["y"] - expected_xy[1]) <= tolerance
         )
 
-        count = 0
-        start_time = time.time()
+    def _consume_live_map_frame(self, data):
+        minimum_frame_id = self._live_capture_min_frame_id
+        expected_xy = self._live_capture_expected_xy
+        if minimum_frame_id is None or not self._frame_matches_barrier(
+            data,
+            minimum_frame_id,
+            expected_xy,
+        ):
+            return None
+        self._live_capture_min_frame_id = None
+        self._live_capture_expected_xy = None
+        return expected_xy
+
+    def _begin_capture_sequence(self, cancel_check=None):
+        if cancel_check is not None:
+            cancel_check()
+
+        current_motion_sequence = getattr(
+            self.stage,
+            "motion_sequence",
+            None,
+        )
+        with self._frame_condition:
+            barrier = self._capture_barrier
+            self._capture_barrier = None
+        if barrier is not None:
+            minimum_frame_id, expected_xy, motion_sequence = barrier
+            if motion_sequence == current_motion_sequence:
+                return (
+                    minimum_frame_id,
+                    expected_xy,
+                    current_motion_sequence,
+                )
+
+        # Standalone captures may be requested outside the scan movement
+        # wrappers. Wait adaptively for controller idle before flushing.
+        if self.stage.is_busy():
+            self.stage.wait_until_not_busy(cancel_check=cancel_check)
+
+        minimum_frame_id = self._flush_camera_queue(discard_frames=1)
+        return (
+            minimum_frame_id,
+            None,
+            getattr(self.stage, "motion_sequence", None),
+        )
+
+    def _restart_capture_after_motion(self, cancel_check=None):
+        """Discard an interrupted average and start after motion is idle."""
+        self.stage.wait_until_not_busy(cancel_check=cancel_check)
+        minimum_frame_id = self._flush_camera_queue(discard_frames=1)
+        return (
+            minimum_frame_id,
+            None,
+            getattr(self.stage, "motion_sequence", None),
+        )
+
+    def _capture_average(
+        self,
+        num_images,
+        crop,
+        cancel_check=None,
+        timeout_seconds=None,
+    ):
+        if (
+            isinstance(num_images, bool)
+            or not isinstance(num_images, (int, np.integer))
+            or int(num_images) < 1
+        ):
+            raise ValueError("num_images must be a positive whole number.")
+        num_images = int(num_images)
         timeout_seconds = (
             max(30.0, float(num_images) * 10.0)
             if timeout_seconds is None
             else float(timeout_seconds)
         )
         deadline = time.monotonic() + timeout_seconds
+        (
+            minimum_frame_id,
+            expected_xy,
+            capture_motion_sequence,
+        ) = self._begin_capture_sequence(cancel_check=cancel_check)
+        accumulator = None
+        count = 0
 
         while count < num_images:
             if cancel_check is not None:
                 cancel_check()
-            if time.monotonic() >= deadline:
+            current_motion_sequence = getattr(
+                self.stage,
+                "motion_sequence",
+                None,
+            )
+            if current_motion_sequence != capture_motion_sequence:
+                (
+                    minimum_frame_id,
+                    expected_xy,
+                    capture_motion_sequence,
+                ) = self._restart_capture_after_motion(
+                    cancel_check=cancel_check
+                )
+                accumulator = None
+                count = 0
+                continue
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                description = "raw camera frames" if not crop else "camera frames"
                 raise TimeoutError(
                     f"Timed out after {timeout_seconds:g} seconds waiting "
-                    "for a fresh camera frame."
+                    f"for fresh {description}."
                 )
-            data = self.frame_buffer[-1]
 
-            if data["stage_busy"]:
-                time.sleep(0.05)
+            with self._frame_condition:
+                data = self.frame_buffer[-1] if self.frame_buffer else None
+                motion_observed = bool(
+                    data is not None
+                    and data["frame_id"] >= minimum_frame_id
+                    and data["stage_busy"]
+                )
+                if (
+                    not motion_observed
+                    and (
+                        data is None
+                        or data["frame_id"] <= self.last_used_capture_frame_id
+                        or not self._frame_matches_barrier(
+                            data,
+                            minimum_frame_id,
+                            expected_xy,
+                        )
+                    )
+                ):
+                    self._frame_condition.wait(
+                        timeout=min(0.1, remaining)
+                    )
+                    continue
+                if not motion_observed:
+                    self.last_used_capture_frame_id = data["frame_id"]
+                    frame = data["frame"]
+
+            if motion_observed:
+                (
+                    minimum_frame_id,
+                    expected_xy,
+                    capture_motion_sequence,
+                ) = self._restart_capture_after_motion(
+                    cancel_check=cancel_check
+                )
+                accumulator = None
+                count = 0
                 continue
 
-            if data["frame_id"] <= self.last_used_capture_frame_id:
-                time.sleep(0.05)
-                continue
-
-            if data["timestamp"] < start_time:
-                time.sleep(0.05)
-                continue
-
-            self.last_used_capture_frame_id = data["frame_id"]
-
-            sum_frame += data["frame"].astype(np.float32)
+            if crop:
+                frame = self.crop_frame(frame)
+            if num_images == 1:
+                return frame.copy()
+            if accumulator is None:
+                accumulator = np.zeros(frame.shape, dtype=np.float32)
+            cv2.accumulate(frame, accumulator)
             count += 1
 
-        if count == 0:
-            return None
+        return cv2.convertScaleAbs(
+            accumulator,
+            alpha=1.0 / count,
+        )
 
-        avg_frame = (sum_frame / count).astype(np.uint8)
-        avg_frame = self.crop_frame(avg_frame)
-
-        return avg_frame
+    def capture_frame(
+        self,
+        num_images=1,
+        cancel_check=None,
+        timeout_seconds=None,
+    ):
+        return self._capture_average(
+            num_images=num_images,
+            crop=True,
+            cancel_check=cancel_check,
+            timeout_seconds=timeout_seconds,
+        )
 
     def capture_frame_raw(
         self,
@@ -305,59 +509,12 @@ class FrameProcessor:
         cancel_check=None,
         timeout_seconds=None,
     ):
-        if cancel_check is not None:
-            cancel_check()
-        if len(self.frame_buffer) == 0:
-            print("No frames available.")
-            return None
-
-        sum_frame = np.zeros_like(
-            self.frame_buffer[-1]["frame"],
-            dtype=np.float32
+        return self._capture_average(
+            num_images=num_images,
+            crop=False,
+            cancel_check=cancel_check,
+            timeout_seconds=timeout_seconds,
         )
-
-        count = 0
-        start_time = time.time()
-        timeout_seconds = (
-            max(30.0, float(num_images) * 10.0)
-            if timeout_seconds is None
-            else float(timeout_seconds)
-        )
-        deadline = time.monotonic() + timeout_seconds
-
-        while count < num_images:
-            if cancel_check is not None:
-                cancel_check()
-            if time.monotonic() >= deadline:
-                raise TimeoutError(
-                    f"Timed out after {timeout_seconds:g} seconds waiting "
-                    "for fresh raw camera frames."
-                )
-            data = self.frame_buffer[-1]
-
-            if data["stage_busy"]:
-                time.sleep(0.05)
-                continue
-
-            if data["frame_id"] <= self.last_used_capture_frame_id:
-                time.sleep(0.05)
-                continue
-
-            if data["timestamp"] < start_time:
-                time.sleep(0.05)
-                continue
-
-            self.last_used_capture_frame_id = data["frame_id"]
-
-            sum_frame += data["frame"].astype(np.float32)
-            count += 1
-
-        if count == 0:
-            print("No frames captured.")
-            return None
-
-        avg_frame = (sum_frame / count).astype(np.uint8)
-        return avg_frame
 
     def crop_frame(self, frame):
         h, w = frame.shape[:2]
@@ -575,10 +732,14 @@ class FrameProcessor:
             bufsize = ((self.width * 24 + 31) // 32 * 4) * self.height
             self.buf = ctypes.create_string_buffer(bufsize)
 
-            self.frame_buffer.clear()
-            self.frame_id = 0
-            self.last_used_capture_frame_id = -1
-            self.last_processed_frame_id = -1
+            with self._frame_condition:
+                self.frame_buffer.clear()
+                self.frame_id = 0
+                self.last_used_capture_frame_id = -1
+                self.last_processed_frame_id = -1
+                self._capture_barrier = None
+                self.reset_live_mapping_capture()
+                self._frame_condition.notify_all()
 
             self.hcam.StartPullModeWithCallback(self.cameraCallback, self)
 

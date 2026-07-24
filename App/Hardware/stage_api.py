@@ -5,6 +5,9 @@ import time
 
 class stage:
     DEFAULT_WAIT_TIMEOUT_SECONDS = 120
+    MOTION_POLL_INTERVAL_SECONDS = 0.01
+    POSITION_TOLERANCE_UM = 1.0
+    POSITION_STABLE_SAMPLES = 3
 
     def __init__(self, port_num, sdk_path):
         self.port_num = port_num
@@ -22,6 +25,8 @@ class stage:
         self.x = 0
         self.y = 0
         self.z = 0.0
+        self.last_confirmed_xy = None
+        self.motion_sequence = 0
         # The camera callback, UI controls, and scan worker all query the same
         # SDK session and shared response buffer.  Keep each command/response
         # pair atomic so their replies cannot overwrite one another.
@@ -85,17 +90,50 @@ class stage:
 
         print("Prior controller setup complete!")
 
-    def is_busy(self):
-        stage_busy = self.cmd("controller.stage.busy.get")[1]
-        z_busy = self.cmd("controller.z.busy.get")[1]
+    def _controller_busy(self, command, strict=False):
+        return_code, response = self.cmd(command)
+        if isinstance(response, str):
+            response = response.strip()
+        try:
+            busy_status = int(response, 10)
+            if busy_status < 0:
+                raise ValueError("negative busy status")
+        except (TypeError, ValueError):
+            busy_status = None
 
-        return stage_busy != "0" or z_busy != "0"
+        if return_code or busy_status is None:
+            if strict:
+                raise RuntimeError(
+                    "Could not read controller busy state from "
+                    f"{command!r}: {response!r}"
+                )
+            # An unreadable controller state must never be treated as idle.
+            return True
+        # Prior reports a motion bitmask: 0 is idle and values such as
+        # 1/2/3 (XY axes) and 4 (Z) are valid busy states.
+        return busy_status != 0
+
+    def is_xy_busy(self, strict=False):
+        return self._controller_busy(
+            "controller.stage.busy.get",
+            strict=strict,
+        )
+
+    def is_z_busy(self, strict=False):
+        return self._controller_busy(
+            "controller.z.busy.get",
+            strict=strict,
+        )
+
+    def is_busy(self):
+        return self.is_xy_busy() or self.is_z_busy()
 
     def wait_until_not_busy(self, timeout=None, cancel_check=None):
         start_time = time.monotonic()
         if timeout is None:
             timeout = self.DEFAULT_WAIT_TIMEOUT_SECONDS
 
+        stable_idle_samples = 0
         while True:
             if cancel_check is not None:
                 try:
@@ -109,8 +147,12 @@ class stage:
                         pass
                     raise
 
-            if not self.is_busy():
-                break
+            if self.is_busy():
+                stable_idle_samples = 0
+            else:
+                stable_idle_samples += 1
+                if stable_idle_samples >= self.POSITION_STABLE_SAMPLES:
+                    break
 
             if (
                 timeout is not None
@@ -123,42 +165,173 @@ class stage:
                 raise TimeoutError(
                     f"Stage remained busy for more than {timeout:g} seconds."
                 )
-            time.sleep(0.05)
+            time.sleep(self.MOTION_POLL_INTERVAL_SECONDS)
 
         return time.monotonic() - start_time
+
+    def wait_for_xy_target(
+        self,
+        x,
+        y,
+        timeout=None,
+        cancel_check=None,
+    ):
+        """Wait for an XY command to reach and remain at its target.
+
+        A controller may briefly report idle immediately after accepting a
+        move. Position convergence prevents that start-up race without adding
+        an unconditional settling delay.
+        """
+        target_x = int(x)
+        target_y = int(y)
+        start_time = time.monotonic()
+        if timeout is None:
+            timeout = self.DEFAULT_WAIT_TIMEOUT_SECONDS
+        stable_samples = 0
+
+        while True:
+            self._check_wait_cancelled(cancel_check)
+            busy = self.is_xy_busy(strict=True)
+            current_x, current_y = self.get_xy_position(strict=True)
+            at_target = (
+                abs(current_x - target_x) <= self.POSITION_TOLERANCE_UM
+                and abs(current_y - target_y) <= self.POSITION_TOLERANCE_UM
+            )
+
+            if not busy and at_target:
+                stable_samples += 1
+                if stable_samples >= self.POSITION_STABLE_SAMPLES:
+                    self.last_confirmed_xy = (current_x, current_y)
+                    return self.last_confirmed_xy
+            else:
+                stable_samples = 0
+
+            self._raise_motion_timeout(
+                start_time,
+                timeout,
+                f"XY stage did not reach ({target_x}, {target_y})",
+            )
+            time.sleep(self.MOTION_POLL_INTERVAL_SECONDS)
+
+    def wait_for_z_target(
+        self,
+        z,
+        timeout=None,
+        cancel_check=None,
+    ):
+        target_z = float(z)
+        start_time = time.monotonic()
+        if timeout is None:
+            timeout = self.DEFAULT_WAIT_TIMEOUT_SECONDS
+        stable_samples = 0
+
+        while True:
+            self._check_wait_cancelled(cancel_check)
+            busy = self.is_z_busy(strict=True)
+            current_z = self.get_z_position(strict=True)
+            at_target = (
+                abs(current_z - target_z)
+                <= self.POSITION_TOLERANCE_UM
+            )
+
+            if not busy and at_target:
+                stable_samples += 1
+                if stable_samples >= self.POSITION_STABLE_SAMPLES:
+                    return current_z
+            else:
+                stable_samples = 0
+
+            self._raise_motion_timeout(
+                start_time,
+                timeout,
+                f"Z stage did not reach {target_z:g}",
+            )
+            time.sleep(self.MOTION_POLL_INTERVAL_SECONDS)
+
+    def _check_wait_cancelled(self, cancel_check):
+        if cancel_check is None:
+            return
+        try:
+            cancel_check()
+        except Exception:
+            try:
+                self.stop_all()
+            except Exception:
+                pass
+            raise
+
+    def _raise_motion_timeout(self, start_time, timeout, message):
+        if (
+            timeout is None
+            or time.monotonic() - start_time < timeout
+        ):
+            return
+        try:
+            self.stop_all()
+        except Exception:
+            pass
+        raise TimeoutError(f"{message} within {timeout:g} seconds.")
 
     def stop_all(self):
         self.stop_x()
         self.stop_y()
         self.stop_z()
 
+    def _note_motion_command(self):
+        self.motion_sequence += 1
+        return self.motion_sequence
+
     # ---------------- Position ----------------
 
-    def get_position(self):
-        _, response = self.cmd("controller.stage.position.get")
+    def get_xy_position(self, strict=False):
+        return_code, response = self.cmd(
+            "controller.stage.position.get"
+        )
 
         try:
+            if return_code:
+                raise ValueError(f"SDK error {return_code}")
             parts = response.split(",")
-            self.x = int(float(parts[0]))
-            self.y = int(float(parts[1]))
-        except Exception:
-            #print(f"Could not parse XY position: {response!r}")
-            #self.stop_all()
-            pass
+            if len(parts) < 2:
+                raise ValueError("missing XY values")
+            x = int(float(parts[0]))
+            y = int(float(parts[1]))
+        except (TypeError, ValueError) as exc:
+            if strict:
+                raise RuntimeError(
+                    f"Could not parse XY position: {response!r}"
+                ) from exc
+            return self.x, self.y
 
-        self.get_z_position()
+        self.x = x
+        self.y = y
+        return self.x, self.y
+
+    def get_position(self, strict=False):
+        self.get_xy_position(strict=strict)
+
+        self.get_z_position(strict=strict)
 
         return self.x, self.y, self.z
 
-    def get_z_position(self):
-        _, response = self.cmd("controller.z.position.get")
+    def get_z_position(self, strict=False):
+        return_code, response = self.cmd(
+            "controller.z.position.get"
+        )
         response = response.strip()
 
         try:
-            self.z = int(float(response)) / 10
-        except ValueError:
-            print(f"Could not parse Z position: {response!r}")
+            if return_code:
+                raise ValueError(f"SDK error {return_code}")
+            z = int(float(response)) / 10
+        except (TypeError, ValueError) as exc:
+            if strict:
+                raise RuntimeError(
+                    f"Could not parse Z position: {response!r}"
+                ) from exc
+            return self.z
 
+        self.z = z
         return self.z
 
     # ---------------- Absolute Movement ----------------
@@ -174,15 +347,25 @@ class stage:
         if self.is_busy():
             return False
 
-        self.cmd(f"controller.stage.goto-position {int(x)} {int(y)}")
+        target_x = int(x)
+        target_y = int(y)
+        return_code, response = self.cmd(
+            f"controller.stage.goto-position {target_x} {target_y}"
+        )
+        if return_code:
+            raise RuntimeError(
+                "The controller rejected the XY move "
+                f"to ({target_x}, {target_y}): {response!r}"
+            )
+        self._note_motion_command()
 
         if wait:
-            self.wait_until_not_busy(
+            self.wait_for_xy_target(
+                target_x,
+                target_y,
                 timeout=timeout,
                 cancel_check=cancel_check,
             )
-
-        self.get_position()
         return True
 
     def move_to_z(
@@ -196,15 +379,21 @@ class stage:
             return False
 
         z_prior_units = int(float(z) * 10)
-        self.cmd(f"controller.z.goto-position {z_prior_units}")
+        return_code, response = self.cmd(
+            f"controller.z.goto-position {z_prior_units}"
+        )
+        if return_code:
+            raise RuntimeError(
+                f"The controller rejected the Z move to {z}: {response!r}"
+            )
+        self._note_motion_command()
 
         if wait:
-            self.wait_until_not_busy(
+            self.wait_for_z_target(
+                z,
                 timeout=timeout,
                 cancel_check=cancel_check,
             )
-
-        self.get_z_position()
         return True
 
     # ---------------- Step Movement ----------------
@@ -243,15 +432,19 @@ class stage:
 
     def start_forward(self):
         self.cmd(f"controller.stage.move-at-velocity 0 -{self.velocity}")
+        self._note_motion_command()
 
     def start_backward(self):
         self.cmd(f"controller.stage.move-at-velocity 0 {self.velocity}")
+        self._note_motion_command()
 
     def start_left(self):
         self.cmd(f"controller.stage.move-at-velocity {self.velocity} 0")
+        self._note_motion_command()
 
     def start_right(self):
         self.cmd(f"controller.stage.move-at-velocity -{self.velocity} 0")
+        self._note_motion_command()
 
     def stop_x(self):
         self.cmd("controller.stage.move-at-velocity 0 0")
@@ -261,9 +454,11 @@ class stage:
 
     def start_up(self):
         self.cmd(f"controller.z.move-at-velocity -{self.z_velocity}")
+        self._note_motion_command()
 
     def start_down(self):
         self.cmd(f"controller.z.move-at-velocity {self.z_velocity}")
+        self._note_motion_command()
 
     def stop_z(self):
         self.cmd("controller.z.move-at-velocity 0")

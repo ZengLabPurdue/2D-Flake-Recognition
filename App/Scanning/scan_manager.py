@@ -314,9 +314,19 @@ class ScanManager:
 
     def _move_stage_xy(self, x, y):
         self._wait_for_stage()
-        if not self.stage.move_to_xy(x, y, wait=False):
+        if not self.stage.move_to_xy(
+            x,
+            y,
+            wait=True,
+            cancel_check=self._check_cancelled,
+        ):
             raise RuntimeError("The stage could not start the requested XY move.")
-        self._wait_for_stage()
+        expected_xy = (
+            self.stage.last_confirmed_xy
+            or (int(round(x)), int(round(y)))
+        )
+        self.frame_processor.arm_capture_after_motion(expected_xy)
+        return expected_xy
 
     def _change_objective(self, position):
         self._check_cancelled()
